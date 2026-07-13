@@ -52,5 +52,6 @@ mlruns/
 
 # IDE / OS
 .DS_Store
+.claude/
 .vscode/
 .idea/
