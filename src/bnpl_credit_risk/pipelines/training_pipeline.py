@@ -16,7 +16,6 @@ from datetime import datetime
 from typing import Any
 
 import numpy as np
-import pandas as pd
 from loguru import logger
 from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_val_score
 
