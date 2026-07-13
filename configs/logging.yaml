@@ -1,0 +1,14 @@
+# Loguru sink configuration. Consumed by bnpl_credit_risk.logging.configure_logging.
+
+level: INFO
+
+console:
+  enabled: true
+  colorize: true
+
+file:
+  enabled: true
+  path: logs/bnpl_credit_risk.log
+  rotation: "10 MB"
+  retention: "14 days"
+  compression: "zip"

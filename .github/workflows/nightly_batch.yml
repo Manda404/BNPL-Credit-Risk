@@ -1,0 +1,40 @@
+name: Nightly BNPL batch scoring
+
+on:
+  schedule:
+    # 02:00 UTC every night. Orchestration only — no business logic lives here.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      input_path:
+        description: "CSV of applications to score"
+        required: false
+        default: "data/processed/applications_to_score.csv"
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --only main
+
+      - name: Run batch inference
+        run: |
+          poetry run bnpl-risk predict-batch \
+            --input "${{ github.event.inputs.input_path || 'data/processed/applications_to_score.csv' }}" \
+            --output "data/predictions/predictions_$(date +%Y_%m_%d).csv"
+
+      - name: Upload predictions
+        uses: actions/upload-artifact@v4
+        with:
+          name: bnpl-predictions
+          path: data/predictions/*.csv

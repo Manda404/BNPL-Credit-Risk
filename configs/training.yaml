@@ -1,0 +1,44 @@
+# Training pipeline configuration: splitting and threshold selection policy.
+
+split:
+  # stratified_random : sklearn train_test_split(stratify=target) — matches the
+  #                      original notebook. Ignores time; can leak future
+  #                      information into training when data has a time axis.
+  # group_by_user      : GroupShuffleSplit on id_column. Guarantees no user
+  #                      appears in both train and test. On this dataset every
+  #                      user_id already appears exactly once, so it is
+  #                      numerically equivalent to stratified_random today —
+  #                      kept configurable for when the data grows multi-row-
+  #                      per-user.
+  # time_based         : sort by date_column, train on the earliest rows, test
+  #                      on the most recent. Simulates real deployment (score
+  #                      future applications using a model trained on the
+  #                      past). DEFAULT — this dataset spans 2023-01-01 to
+  #                      2024-12-31 and a time split is the only one that
+  #                      avoids look-ahead bias.
+  strategy: time_based
+  test_size: 0.2
+  random_seed: 42
+
+mlflow:
+  enabled: false
+  tracking_uri: "file:./mlruns"
+  experiment_name: bnpl-credit-risk
+
+threshold:
+  # fixed | best_f1 | min_recall | min_precision | cost_matrix
+  policy: best_f1
+  fixed_value: 0.5
+  min_recall: 0.6
+  min_precision: 0.6
+  # cost_matrix is only used when policy=cost_matrix. Costs are in arbitrary
+  # currency units and must be set per business context before relying on it.
+  cost_matrix:
+    false_negative_cost: 5.0 # granting credit to a user who defaults
+    false_positive_cost: 1.0 # rejecting a user who would have repaid
+
+risk_bands:
+  - { name: "Low Risk", max_probability: 0.25 }
+  - { name: "Medium Risk", max_probability: 0.5 }
+  - { name: "High Risk", max_probability: 0.75 }
+  - { name: "Very High Risk", max_probability: 1.01 }

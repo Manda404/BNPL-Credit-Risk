@@ -1,0 +1,112 @@
+# Model Card — BNPL Default Risk (`application_risk`)
+
+This card describes the **default production model** (`configs/model.yaml`,
+`risk_scope=application_risk`). A separate `behavioral_risk` profile exists
+(`configs/model_behavioral_risk.yaml`) for a different use case — see
+"Cases this model must NOT be used for" below.
+
+## Objective
+
+Estimate the probability that a customer will default on a BNPL
+(Buy-Now-Pay-Later) installment plan, using only information available
+**before** the loan is granted, to support an accept/reject or
+credit-limit decision at checkout.
+
+## Intended population
+
+Individual consumers applying for a BNPL purchase in the six markets
+present in the training data: Australia, USA, Germany, India, Canada, UK.
+Ages 18–59 in the training data (bounds enforced by `configs/data.yaml`:
+[18, 100], with values outside the engineered `age_group` bins of [17, 60]
+mapped to an "Unknown" bucket rather than extrapolated).
+
+## Training data
+
+- Source: `data/raw/BNPL_CreditRisk_Dataset.csv`, 10,345 rows, one row per
+  customer/transaction.
+- Target: `default_flag` (binary), observed default rate ~39.05%.
+- Split: time-based — trained on the earliest ~80% of transactions
+  (through 2024-10-18 in the reference run), evaluated on the most recent
+  ~20%.
+
+## Features used (application_risk scope)
+
+`age`, `employment_type`, `monthly_income`, `credit_score`, `purchase_amount`,
+`product_category`, `bnpl_installments`, `app_usage_frequency`,
+`debt_to_income_ratio`, `location`, plus engineered `income_to_purchase_ratio`,
+`age_group`, `txn_month`.
+
+**Explicitly excluded**: `repayment_delay_days`, `missed_payments`,
+`risk_score`, `customer_segment`, and the engineered `payment_stress` /
+`is_high_risk` — all depend on repayment events that don't exist at
+application time. Full reasoning: [docs/data_contract.md](data_contract.md#leakage-audit).
+
+## Metrics (reference training run, application_risk, time-based split)
+
+| Metric | Value |
+|---|---|
+| ROC-AUC | ~0.70 |
+| PR-AUC | ~0.54 |
+| Brier score | ~0.22 |
+| F1 (at selected threshold) | ~0.64 |
+| Decision threshold | selected by `best_f1` policy on train out-of-fold predictions (~0.23 in the reference run) |
+
+Exact figures for a given artifact are in that version's `metrics.json` and
+`threshold.json` — the numbers above will drift slightly between retrains
+and are not a contractual guarantee.
+
+## Limitations
+
+- ROC-AUC ~0.70 is a real, honest number for a decision made with no
+  repayment history — it is meaningfully lower than what a model using
+  behavioral signals achieves (~0.78), by design (see leakage audit).
+- Calibration is **off by default**; if predicted probabilities are used
+  directly in a cost calculation (not just for ranking/banding), enable
+  calibration first (`configs/model.yaml`: `calibration.enabled: true`) and
+  check the Brier score before/after.
+- Trained on six markets only; behavior on customers from other countries
+  is unverified.
+- `customer_segment` and other bureau-style scores were deliberately
+  excluded — if a real deployment has genuine pre-approval bureau data
+  (distinct from this dataset's `risk_score`), it is not currently modeled
+  and would need its own leakage review before inclusion.
+- No fairness/bias audit across `employment_type`, `location`, or age
+  groups has been performed. `employment_type=Unemployed` shows the highest
+  raw default rate in the training data — deploying this model without a
+  disparate-impact review is not recommended for any jurisdiction with
+  fair-lending requirements.
+
+## Risks
+
+- Silently retraining with `risk_scope=behavioral_risk` and shipping it as
+  the production accept/reject model would reintroduce the leakage this
+  migration removed. `configs/model.yaml` defaults to `application_risk`
+  specifically to prevent this; changing that default should require the
+  same level of review as this document.
+- A stale model (not retrained as the customer population shifts) will
+  silently degrade — nothing in this repo currently alerts on prediction
+  drift; `metrics.json` from each retrain is the only current signal.
+
+## Authorized use cases
+
+- Real-time or batch accept/reject / credit-limit scoring for new BNPL
+  applications, as one input among others in a human-reviewable decision
+  process.
+- Portfolio-level risk reporting (aggregate risk-band distribution over a
+  batch of applications).
+
+## Use cases this model must NOT be used for
+
+- Post-origination collections prioritization — use the `behavioral_risk`
+  profile instead, trained explicitly for that purpose.
+- Fully automated, non-reviewable credit denial without a human-in-the-loop
+  process or an adverse-action explanation mechanism.
+- Any jurisdiction/population not represented in the training data without
+  a new leakage and fairness review.
+
+## Retraining cadence
+
+No automated retraining is configured. Recommended starting point: monthly
+retrain + re-evaluation against a held-out recent window, comparing
+`metrics.json` across versions before promoting a new `latest` — revisit
+based on observed population drift once in production.

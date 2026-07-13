@@ -1,0 +1,87 @@
+[tool.poetry]
+name = "bnpl-credit-risk"
+version = "0.1.0"
+description = "BNPL default risk scoring: application-time and behavioral risk models, batch inference, and reporting."
+authors = ["Manda Surel <s239150.eps@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "bnpl_credit_risk", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+pandas = "^2.2"
+numpy = "^1.26"
+scikit-learn = "^1.5"
+xgboost = "^2.1"
+pydantic = "^2.8"
+pydantic-settings = "^2.4"
+loguru = "^0.7"
+PyYAML = "^6.0"
+joblib = "^1.4"
+typer = "^0.15"
+rich = "^13.7"
+matplotlib = "^3.9"
+mlflow = { version = "^2.16", optional = true }
+
+[tool.poetry.extras]
+mlflow = ["mlflow"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-cov = "^5.0"
+ruff = "^0.6"
+mypy = "^1.11"
+pre-commit = "^3.8"
+nbstripout = "^0.7"
+jupyter = "^1.0"
+ipykernel = "^6.29"
+pandas-stubs = "^2.2"
+types-pyyaml = "^6.0.12.20260518"
+
+[tool.poetry.scripts]
+bnpl-risk = "bnpl_credit_risk.cli:app"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+extend-exclude = ["Dev"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "N"]
+# E501: handled by line-length above, not worth hard-failing on.
+# N806/N803: X_train/X_test/X are standard scikit-learn notation, not a naming bug.
+# B008: typer.Option(...) as a parameter default is the documented Typer pattern.
+ignore = ["E501", "N806", "N803", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bnpl_credit_risk"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = ["E402"]  # cells legitimately import after markdown/setup cells
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+explicit_package_bases = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = false
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --cov=bnpl_credit_risk --cov-report=term-missing"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["src/bnpl_credit_risk"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

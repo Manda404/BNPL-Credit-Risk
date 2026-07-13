@@ -1,0 +1,82 @@
+# Feature engineering configuration.
+#
+# risk_scope controls which raw + engineered columns are visible to the model.
+# This is the mechanism that prevents target leakage from being silently baked
+# into "the" production model — see docs/data_contract.md §Leakage audit.
+#
+#   application_risk : only information available BEFORE the BNPL is granted.
+#                       Excludes repayment_delay_days, missed_payments, risk_score,
+#                       customer_segment (and anything engineered from them).
+#   behavioral_risk   : adds post-origination repayment events. Reproduces the
+#                       original notebook's feature set. Useful for in-life
+#                       monitoring / collections prioritization, NOT for the
+#                       accept/reject decision at checkout.
+#
+# The active scope is selected in configs/model.yaml (default: application_risk).
+
+engineered_features:
+  payment_stress:
+    enabled: true
+    requires: [repayment_delay_days, missed_payments]
+    leaky: true
+  income_to_purchase_ratio:
+    enabled: true
+    requires: [monthly_income, purchase_amount]
+    leaky: false
+  age_group:
+    enabled: true
+    requires: [age]
+    leaky: false
+    bins: [17, 25, 35, 45, 60]
+    labels: ["18-25", "26-35", "36-45", "46-59"]
+  txn_month:
+    enabled: true
+    requires: [transaction_date]
+    leaky: false
+  is_high_risk:
+    enabled: true
+    requires: [risk_score]
+    leaky: true
+    risk_score_threshold: 250
+
+# Raw columns considered leaky (post-origination / behavioral) for the application_risk scope.
+leaky_raw_columns:
+  - repayment_delay_days
+  - missed_payments
+  - risk_score
+  - customer_segment
+
+# Columns never fed to the model regardless of scope (identifiers / dates / target).
+always_excluded_columns:
+  - user_id
+  - transaction_date
+  - default_flag
+
+numeric_features:
+  - age
+  - monthly_income
+  - credit_score
+  - purchase_amount
+  - bnpl_installments
+  - app_usage_frequency
+  - debt_to_income_ratio
+  - income_to_purchase_ratio
+  - txn_month
+
+categorical_features:
+  - employment_type
+  - product_category
+  - location
+  - age_group
+
+# Behavioral-only additions layered on top of the base feature lists above
+# when risk_scope=behavioral_risk.
+behavioral_numeric_features:
+  - repayment_delay_days
+  - missed_payments
+  - risk_score
+  - payment_stress
+  - is_high_risk
+
+behavioral_categorical_features:
+  - customer_segment

@@ -1,0 +1,27 @@
+# Alternate profile: behavioral risk model (post-origination signals included).
+# Run explicitly with: poetry run bnpl-risk train --config configs/model_behavioral_risk.yaml
+# Do NOT use this model's output to decide whether to grant a new BNPL loan —
+# it depends on repayment events that don't exist yet at application time.
+
+risk_scope: behavioral_risk
+
+algorithm: xgboost
+
+xgboost_params:
+  n_estimators: 300
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  eval_metric: logloss
+  random_state: 42
+
+calibration:
+  enabled: false
+  method: sigmoid
+  cv: 5
+
+cross_validation:
+  enabled: true
+  n_splits: 5
+  shuffle: true

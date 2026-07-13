@@ -1,0 +1,19 @@
+# Batch inference configuration.
+
+model_version: latest # "latest" resolves artifacts/models/latest.json, or an explicit run id
+
+validation:
+  strategy: strict # strict | warn | quarantine
+  quarantine_output_dir: data/reports
+
+output:
+  format: csv
+  directory: data/predictions
+  columns:
+    - user_id
+    - default_probability
+    - predicted_default
+    - decision_threshold
+    - risk_band
+    - model_version
+    - scoring_timestamp

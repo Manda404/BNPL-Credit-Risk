@@ -1,0 +1,10 @@
+services:
+  bnpl-risk:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    command: ["train"]

@@ -1,0 +1,17 @@
+# Base configuration shared by every pipeline. Paths are resolved relative to the
+# project root at runtime (see bnpl_credit_risk.settings.Settings.project_root) —
+# never hardcode absolute paths (e.g. Kaggle-style /kaggle/input/...) here.
+#
+# Deployment-level paths (where the raw dataset lives, where artifacts/logs get
+# written) are environment concerns and live in Settings (.env / BNPL_* env
+# vars) instead — see .env.example. Only intended for output the pipeline
+# itself produces, without a Settings equivalent.
+
+project_name: bnpl-credit-risk
+random_seed: 42
+
+paths:
+  data_interim: data/interim
+  data_processed: data/processed
+  data_predictions: data/predictions
+  data_reports: data/reports

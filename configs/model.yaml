@@ -1,0 +1,33 @@
+# Model configuration. `risk_scope` is the single switch that determines whether
+# the model is trained as an application-time (pre-decision) model or a
+# behavioral (post-origination) model — see configs/features.yaml.
+#
+# Default is application_risk: this is the model that reflects the real BNPL
+# use case (decide whether to grant credit at checkout, before any repayment
+# event exists). behavioral_risk is kept as an explicit, separately runnable
+# profile — never silently blended into production.
+
+risk_scope: application_risk # application_risk | behavioral_risk
+
+algorithm: xgboost
+
+xgboost_params:
+  n_estimators: 300
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  eval_metric: logloss
+  random_state: 42
+  # scale_pos_weight is computed at train time from the TRAIN split only
+  # (see bnpl_credit_risk.models.trainer.ModelTrainer) — never set here.
+
+calibration:
+  enabled: false
+  method: sigmoid # sigmoid | isotonic
+  cv: 5
+
+cross_validation:
+  enabled: true
+  n_splits: 5
+  shuffle: true

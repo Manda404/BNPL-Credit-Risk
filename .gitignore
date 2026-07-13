@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Poetry
+poetry.lock.bak
+
+# Env
+.env
+
+# Data (raw dataset is small and versioned intentionally; generated data is not)
+data/interim/*
+data/processed/*
+data/predictions/*
+data/reports/*
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/predictions/.gitkeep
+!data/reports/.gitkeep
+
+# Artifacts
+artifacts/models/*
+artifacts/preprocessors/*
+artifacts/metrics/*
+artifacts/figures/*
+artifacts/schemas/*
+!artifacts/models/.gitkeep
+!artifacts/preprocessors/.gitkeep
+!artifacts/metrics/.gitkeep
+!artifacts/figures/.gitkeep
+!artifacts/schemas/.gitkeep
+
+# Logs
+logs/*.log
+!logs/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+
+# MLflow
+mlruns/
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/

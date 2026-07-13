@@ -1,0 +1,68 @@
+# Data contract: column roles and validation policy.
+# strategy: strict (raise and stop) | warn (log and continue) | quarantine (split valid/invalid rows)
+validation:
+  strategy: strict
+  quarantine_output_dir: data/reports
+
+id_column: user_id
+target_column: default_flag
+date_column: transaction_date
+
+# Columns expected in the raw dataset (training-time). Inference input may omit target_column.
+required_columns:
+  - user_id
+  - age
+  - employment_type
+  - monthly_income
+  - credit_score
+  - purchase_amount
+  - product_category
+  - bnpl_installments
+  - repayment_delay_days
+  - missed_payments
+  - default_flag
+  - app_usage_frequency
+  - location
+  - transaction_date
+  - debt_to_income_ratio
+  - risk_score
+  - customer_segment
+
+numeric_columns:
+  - age
+  - monthly_income
+  - credit_score
+  - purchase_amount
+  - bnpl_installments
+  - repayment_delay_days
+  - missed_payments
+  - app_usage_frequency
+  - debt_to_income_ratio
+  - risk_score
+
+categorical_columns:
+  - employment_type
+  - product_category
+  - location
+  - customer_segment
+
+# Bounds used by the data validator to flag impossible values. Derived from the
+# observed raw dataset (see docs/data_contract.md) — kept generous on purpose so
+# legitimate future data isn't rejected, while catching clearly broken values.
+bounds:
+  age: { min: 18, max: 100 }
+  monthly_income: { min: 0, max: 1000000 }
+  credit_score: { min: 300, max: 850 }
+  purchase_amount: { min: 0, max: 100000 }
+  bnpl_installments: { min: 1, max: 60 }
+  repayment_delay_days: { min: 0, max: 365 }
+  missed_payments: { min: 0, max: 60 }
+  app_usage_frequency: { min: 0, max: 100 }
+  debt_to_income_ratio: { min: 0, max: 5 }
+  risk_score: { min: 0, max: 1000 }
+
+allowed_values:
+  employment_type: [Salaried, Student, Self-Employed, Unemployed]
+  product_category: [Electronics, Fashion, Sports, Home, Beauty]
+  location: [Australia, USA, Germany, India, Canada, UK]
+  customer_segment: [Low Risk, Medium Risk, High Risk]
