@@ -34,6 +34,7 @@ artifacts/preprocessors/*
 artifacts/metrics/*
 artifacts/figures/*
 artifacts/schemas/*
+artifacts/benchmarks/*
 !artifacts/models/.gitkeep
 !artifacts/preprocessors/.gitkeep
 !artifacts/metrics/.gitkeep

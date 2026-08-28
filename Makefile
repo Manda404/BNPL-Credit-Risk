@@ -1,4 +1,4 @@
-.PHONY: install lint typecheck test validate train evaluate predict-batch pipeline clean
+.PHONY: install lint typecheck test validate split-data train evaluate predict-batch pipeline clean
 
 install:
 	poetry install
@@ -17,6 +17,9 @@ test:
 
 validate:
 	poetry run bnpl-risk validate
+
+split-data:
+	poetry run python scripts/split_data.py
 
 train:
 	poetry run bnpl-risk train

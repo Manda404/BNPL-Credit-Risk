@@ -63,8 +63,7 @@ class ArtifactBundle:
         )
 
         if set_as_latest:
-            pointer = {"version": version, "path": str(version_dir)}
-            (models_dir / LATEST_POINTER_FILENAME).write_text(json.dumps(pointer, indent=2))
+            promote_model_version(models_dir, version)
 
         return version_dir
 
@@ -99,6 +98,18 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ArtifactNotFoundError(f"Missing artifact file: {path}")
     return json.loads(path.read_text())
+
+
+def promote_model_version(models_dir: Path, version: str) -> Path:
+    """Atomically move the relocatable ``latest`` pointer to one saved version."""
+    version_dir = models_dir / version
+    if not version_dir.exists():
+        raise ArtifactNotFoundError(f"Cannot promote missing model version: {version_dir}")
+    pointer_path = models_dir / LATEST_POINTER_FILENAME
+    temporary_path = models_dir / f".{LATEST_POINTER_FILENAME}.tmp"
+    temporary_path.write_text(json.dumps({"version": version}, indent=2))
+    temporary_path.replace(pointer_path)
+    return pointer_path
 
 
 def current_git_commit() -> str | None:

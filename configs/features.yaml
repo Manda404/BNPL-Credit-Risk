@@ -19,17 +19,46 @@ engineered_features:
     enabled: true
     requires: [repayment_delay_days, missed_payments]
     leaky: true
-  income_to_purchase_ratio:
+  installment_amount:
     enabled: true
-    requires: [monthly_income, purchase_amount]
+    requires: [purchase_amount, bnpl_installments]
     leaky: false
+  installment_burden_ratio:
+    enabled: true
+    requires: [purchase_amount, bnpl_installments, monthly_income]
+    leaky: false
+  affordability_band:
+    enabled: true
+    requires: [installment_burden_ratio]
+    leaky: false
+    bins: [0.0, 0.01, 0.02, 0.05, 0.10, 5.0]
+    labels: [Very Low, Low, Moderate, High, Very High]
+  income_after_installment:
+    enabled: true
+    requires: [monthly_income, installment_amount]
+    leaky: false
+  credit_score_band:
+    enabled: true
+    requires: [credit_score]
+    leaky: false
+    bins: [299, 579, 669, 739, 799, 850]
+    labels: [Poor, Fair, Good, Very Good, Excellent]
   age_group:
     enabled: true
     requires: [age]
     leaky: false
-    bins: [17, 25, 35, 45, 60]
-    labels: ["18-25", "26-35", "36-45", "46-59"]
-  txn_month:
+    bins: [17, 25, 35, 45, 60, 100]
+    labels: ["18-25", "26-35", "36-45", "46-60", "61-100"]
+  installment_term:
+    enabled: true
+    requires: [bnpl_installments]
+    leaky: false
+    mapping: { 3: Short, 6: Medium, 9: Long, 12: Extended }
+  transaction_month_sin:
+    enabled: true
+    requires: [transaction_date]
+    leaky: false
+  transaction_month_cos:
     enabled: true
     requires: [transaction_date]
     leaky: false
@@ -39,12 +68,24 @@ engineered_features:
     leaky: true
     risk_score_threshold: 250
 
-# Raw columns considered leaky (post-origination / behavioral) for the application_risk scope.
+# Raw columns considered leaky for an application decision, with the semantic
+# reason used by the leakage audit report. Correlation alone is not used to
+# decide leakage: the decisive criterion is availability at checkout time.
 leaky_raw_columns:
-  - repayment_delay_days
-  - missed_payments
-  - risk_score
-  - customer_segment
+  repayment_delay_days: Available only after repayments have started.
+  missed_payments: Observed only after one or more scheduled repayments.
+  risk_score: Provenance is undocumented and it behaves as a derived target proxy; excluded until pre-checkout availability is demonstrated.
+  customer_segment: Derived from risk_score and therefore inherits its leakage risk.
+
+leakage_output:
+  directory: data/interim
+  train_filename: train_application.csv
+  test_filename: test_application.csv
+
+feature_output:
+  directory: data/processed
+  train_filename: train_features.csv
+  test_filename: test_features.csv
 
 # Columns never fed to the model regardless of scope (identifiers / dates / target).
 always_excluded_columns:
@@ -60,14 +101,20 @@ numeric_features:
   - bnpl_installments
   - app_usage_frequency
   - debt_to_income_ratio
-  - income_to_purchase_ratio
-  - txn_month
+  - installment_amount
+  - installment_burden_ratio
+  - income_after_installment
+  - transaction_month_sin
+  - transaction_month_cos
 
 categorical_features:
   - employment_type
   - product_category
   - location
   - age_group
+  - credit_score_band
+  - affordability_band
+  - installment_term
 
 # Behavioral-only additions layered on top of the base feature lists above
 # when risk_scope=behavioral_risk.

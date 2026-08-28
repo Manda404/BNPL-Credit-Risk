@@ -45,7 +45,11 @@ def build_preprocessing_pipeline(
         [
             (
                 "feature_engineering",
-                FeatureEngineeringTransformer(features_config, date_column=date_column),
+                FeatureEngineeringTransformer(
+                    features_config,
+                    risk_scope=risk_scope,
+                    date_column=date_column,
+                ),
             ),
             ("column_transform", column_transformer),
         ]

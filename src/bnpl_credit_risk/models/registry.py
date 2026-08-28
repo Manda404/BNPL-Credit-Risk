@@ -19,7 +19,17 @@ def resolve_model_dir(models_dir: Path, model_version: str) -> Path:
                 f"No trained model found: {pointer_path} does not exist. Run `bnpl-risk train` first."
             )
         pointer = json.loads(pointer_path.read_text())
-        return Path(pointer["path"])
+        version = pointer.get("version")
+        if not version:
+            raise ModelNotFoundError(
+                f"Invalid latest model pointer: missing 'version' in {pointer_path}"
+            )
+        version_dir = models_dir / version
+        if not version_dir.exists():
+            raise ModelNotFoundError(
+                f"Latest model version '{version}' not found under {models_dir}"
+            )
+        return version_dir
 
     version_dir = models_dir / model_version
     if not version_dir.exists():

@@ -31,7 +31,12 @@ class Predictor:
         return cls(ArtifactBundle.load(version_dir))
 
     def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
-        return self.bundle.pipeline.predict_proba(df)[:, 1]
+        probabilities = np.asarray(self.bundle.pipeline.predict_proba(df))
+        if probabilities.ndim != 2 or probabilities.shape[1] < 2:
+            raise ValueError(
+                "Published model predict_proba must return two class-probability columns"
+            )
+        return probabilities[:, 1]
 
     def score(self, df: pd.DataFrame, id_column: str) -> pd.DataFrame:
         threshold = self.bundle.threshold["threshold"]

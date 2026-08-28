@@ -20,10 +20,9 @@ joblib = "^1.4"
 typer = "^0.15"
 rich = "^13.7"
 matplotlib = "^3.9"
-mlflow = { version = "^2.16", optional = true }
-
-[tool.poetry.extras]
-mlflow = ["mlflow"]
+mlflow = "3.14.0"
+lightgbm = "^4.7.0"
+catboost = "^1.2.10"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

@@ -58,6 +58,45 @@ def test_config(project_config, tmp_path: Path):
         }
     )
     model = project_config.model.model_copy(
-        update={"cross_validation": project_config.model.cross_validation.model_copy(update={"n_splits": 3})}
+        update={
+            "cross_validation": project_config.model.cross_validation.model_copy(
+                update={"n_splits": 3}
+            )
+        }
     )
-    return project_config.model_copy(update={"base": base, "model": model})
+    data_split = project_config.data_split.model_copy(
+        update={
+            "output": project_config.data_split.output.model_copy(
+                update={"directory": str(tmp_path / "raw")}
+            ),
+            "visualization": project_config.data_split.visualization.model_copy(
+                update={"path": str(tmp_path / "figures" / "target_distribution.png")}
+            ),
+        }
+    )
+    features = project_config.features.model_copy(
+        update={
+            "leakage_output": project_config.features.leakage_output.model_copy(
+                update={"directory": str(tmp_path / "interim")}
+            ),
+            "feature_output": project_config.features.feature_output.model_copy(
+                update={"directory": str(tmp_path / "processed")}
+            ),
+        }
+    )
+    training = project_config.training.model_copy(
+        update={
+            "mlflow": project_config.training.mlflow.model_copy(
+                update={"enabled": False}
+            )
+        }
+    )
+    return project_config.model_copy(
+        update={
+            "base": base,
+            "features": features,
+            "model": model,
+            "data_split": data_split,
+            "training": training,
+        }
+    )

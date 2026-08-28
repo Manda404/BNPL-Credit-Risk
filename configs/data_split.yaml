@@ -1,0 +1,15 @@
+# Materialized stratified train/test export used by 01_data_validation.ipynb.
+# This is intentionally separate from training.yaml, whose default split is
+# time-based for production model evaluation.
+
+test_size: 0.10
+random_seed: 42
+
+output:
+  directory: data/raw
+  train_filename: train.csv
+  test_filename: test.csv
+
+visualization:
+  size: [15, 6]
+  path: artifacts/figures/data_split_target_distribution.png

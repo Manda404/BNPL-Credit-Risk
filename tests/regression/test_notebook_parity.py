@@ -62,14 +62,23 @@ def test_engineered_features_match_notebook_set(real_config):
 
     settings = Settings(data_raw_path=str(RAW_DATASET_PATH))
     df = BNPLDataLoader(settings, real_config.data).load_raw()
-    out = BNPLFeatureBuilder(real_config.features).transform(df)
+    out = BNPLFeatureBuilder(
+        real_config.features,
+        risk_scope="behavioral_risk",
+    ).transform(df)
     for col in ENGINEERED_FEATURE_COLUMNS:
         assert col in out.columns
     assert set(ENGINEERED_FEATURE_COLUMNS) == {
         "payment_stress",
-        "income_to_purchase_ratio",
+        "installment_amount",
+        "installment_burden_ratio",
+        "affordability_band",
+        "income_after_installment",
+        "credit_score_band",
         "age_group",
-        "txn_month",
+        "installment_term",
+        "transaction_month_sin",
+        "transaction_month_cos",
         "is_high_risk",
     }
 

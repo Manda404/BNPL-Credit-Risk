@@ -126,15 +126,18 @@ poetry install
 # 2. Validate the data contract
 poetry run bnpl-risk validate
 
-# 3. Train (application_risk by default)
+# 3. Optional: export a reproducible 90/10 stratified train/test dataset
+poetry run python scripts/split_data.py
+
+# 4. Train (application_risk by default)
 poetry run bnpl-risk train
 
-# 4. Re-evaluate a saved model
+# 5. Re-evaluate a saved model
 poetry run bnpl-risk evaluate --model-version latest
 
-# 5. Score a batch of new applications
+# 6. Score a batch of new applications
 poetry run bnpl-risk predict-batch \
-  --input data/processed/applications_to_score.csv \
+  --input /path/to/applications.csv \
   --output data/predictions/predictions_2026_07_13.csv
 ```
 
@@ -151,8 +154,8 @@ Sample `predict-batch` output:
 | 5597 | 0.646 | 1 | High Risk | 2026-07-13_084031 |
 | 2162 | 0.027 | 0 | Low Risk | 2026-07-13_084031 |
 
-Copy `.env.example` to `.env` to override paths, log level, or MLflow —
-no secrets required for local use.
+Copy `.env.example` to `.env` to override machine-specific paths or the log
+level. MLflow is configured centrally in `configs/training.yaml`.
 
 ## Project layout
 
@@ -169,6 +172,7 @@ src/bnpl_credit_risk/
 ├── evaluation/                  metrics, thresholding, business cost, reports
 ├── visualization/                EDA / evaluation / calibration plots
 ├── pipelines/                     validation / training / evaluation / batch inference
+├── tracking/                      MLflow benchmark and approved-model runs
 └── inference/                      Predictor (core), batch, realtime
 tests/
 ├── unit/ · integration/ · regression/    51 tests, real dataset + fixtures
@@ -182,7 +186,7 @@ Nothing pipeline-relevant is hardcoded. Two layers, two concerns:
   (data contract, feature scopes, model hyperparameters, split strategy,
   threshold policy, risk bands).
 - **`.env` / `BNPL_*` env vars** — deployment concerns (dataset path,
-  artifacts directory, log level, MLflow on/off). See
+  artifacts directory and log level). See
   [`.env.example`](.env.example).
 
 Split strategy, validation policy, calibration, and decision-threshold
@@ -194,6 +198,31 @@ split:
   strategy: time_based   # stratified_random | group_by_user | time_based
 threshold:
   policy: best_f1         # fixed | best_f1 | min_recall | min_precision | cost_matrix
+mlflow:
+  enabled: true
+  tracking_uri: sqlite:////Users/surelmanda/.mlflow/mlflow.db
+  artifact_uri: file:///Users/surelmanda/.mlflow/artifacts
+  experiment_name: bnpl_credit_risk
+```
+
+Notebook 04 records one parent comparison run and one nested run per boosting
+model. Notebook 05 records the approved winner, final-test metrics, threshold,
+calibration, lift/gains, feature importance, SHAP summary and the published
+artifact in the shared platform used by the other local ML projects. Open its
+UI with one SQLite-safe worker:
+
+MLflow also stores the development and reserved-test datasets with source,
+schema, profile and digest; copies the CSV inputs; records fold and boosting-
+iteration metrics, OOF/test predictions, figures, configuration, dependency
+lockfile, Git commit and system metrics; logs a signed PyFunc model; and
+publishes the accepted version in the Model Registry under
+`bnpl_credit_risk_default_model@champion`.
+
+```bash
+poetry run mlflow server \
+  --backend-store-uri sqlite:////Users/surelmanda/.mlflow/mlflow.db \
+  --default-artifact-root file:///Users/surelmanda/.mlflow/artifacts \
+  --host 127.0.0.1 --port 5000 --workers 1
 ```
 
 ## Testing & quality

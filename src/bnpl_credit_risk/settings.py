@@ -3,7 +3,7 @@
 Two layers are kept deliberately separate:
 
 - `Settings` (pydantic-settings): environment-driven, read from `.env` / real
-  env vars. Machine/deployment-specific (paths overrides, log level, MLflow).
+  env vars. Machine/deployment-specific (paths overrides and log level).
 - `*Config` models below: read from `configs/*.yaml`. Pipeline-specific,
   versioned in git, meant to be reviewed like code.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from bnpl_credit_risk.constants import (
@@ -49,9 +49,6 @@ class Settings(BaseSettings):
     artifacts_dir: str = "artifacts"
     logs_dir: str = "logs"
     log_level: str = "INFO"
-    mlflow_enabled: bool = False
-    mlflow_tracking_uri: str = "file:./mlruns"
-    mlflow_experiment_name: str = "bnpl-credit-risk"
     random_seed: int = 42
 
     def resolve(self, relative_path: str) -> Path:
@@ -93,8 +90,42 @@ class BoundConfig(BaseModel):
     max: float
 
 
+class DataQualityVisualizationConfig(BaseModel):
+    size: tuple[float, float]
+
+    @field_validator("size")
+    @classmethod
+    def validate_size(cls, value: tuple[float, float]) -> tuple[float, float]:
+        if any(dimension <= 0 for dimension in value):
+            raise ValueError("data quality visualization dimensions must be strictly positive")
+        return value
+
+
+class DataQualityConfig(BaseModel):
+    visualization: DataQualityVisualizationConfig
+
+
+class ExploratoryAnalysisConfig(BaseModel):
+    visualization: DataQualityVisualizationConfig
+
+
+class DriftConfig(BaseModel):
+    warning_psi: float = Field(gt=0)
+    critical_psi: float = Field(gt=0)
+    recent_fraction: float = Field(gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self) -> DriftConfig:
+        if self.critical_psi <= self.warning_psi:
+            raise ValueError("critical_psi must be greater than warning_psi")
+        return self
+
+
 class DataConfig(BaseModel):
     validation: ValidationPolicyConfig
+    quality_report: DataQualityConfig
+    exploratory_analysis: ExploratoryAnalysisConfig
+    drift: DriftConfig
     id_column: str
     target_column: str
     date_column: str
@@ -114,12 +145,21 @@ class EngineeredFeatureConfig(BaseModel):
     leaky: bool
     bins: list[float] | None = None
     labels: list[str] | None = None
+    mapping: dict[int, str] | None = None
     risk_score_threshold: float | None = None
+
+
+class DatasetOutputConfig(BaseModel):
+    directory: str
+    train_filename: str
+    test_filename: str
 
 
 class FeaturesConfig(BaseModel):
     engineered_features: dict[str, EngineeredFeatureConfig]
-    leaky_raw_columns: list[str]
+    leaky_raw_columns: dict[str, str]
+    leakage_output: DatasetOutputConfig
+    feature_output: DatasetOutputConfig
     always_excluded_columns: list[str]
     numeric_features: list[str]
     categorical_features: list[str]
@@ -140,6 +180,44 @@ class CrossValidationConfig(BaseModel):
     enabled: bool
     n_splits: int
     shuffle: bool
+    early_stopping_rounds: int = Field(gt=0)
+
+
+class BenchmarkVisualizationConfig(BaseModel):
+    size: tuple[float, float]
+    top_n_features: int = Field(gt=0)
+    shap_sample_size: int = Field(gt=0)
+    shap_top_n: int = Field(gt=0)
+
+    @field_validator("size")
+    @classmethod
+    def validate_size(cls, value: tuple[float, float]) -> tuple[float, float]:
+        if any(dimension <= 0 for dimension in value):
+            raise ValueError("benchmark visualization dimensions must be strictly positive")
+        return value
+
+
+class BoostingBenchmarkConfig(BaseModel):
+    models: list[Literal["XGBoost", "LightGBM", "CatBoost"]]
+    selection_metric: Literal["ROC-AUC", "PR-AUC", "MCC"]
+    comparison_threshold: float = Field(ge=0, le=1)
+    artifact_subdirectory: str
+    threshold_grid_start: float = Field(ge=0, lt=1)
+    threshold_grid_stop: float = Field(gt=0, le=1)
+    threshold_grid_step: float = Field(gt=0, lt=1)
+    lightgbm_params: dict[str, Any]
+    catboost_params: dict[str, Any]
+    visualization: BenchmarkVisualizationConfig
+
+    @model_validator(mode="after")
+    def validate_threshold_grid(self) -> BoostingBenchmarkConfig:
+        if self.threshold_grid_stop <= self.threshold_grid_start:
+            raise ValueError("threshold_grid_stop must be greater than threshold_grid_start")
+        if not self.models:
+            raise ValueError("at least one boosting model must be configured")
+        if len(self.models) != len(set(self.models)):
+            raise ValueError("boosting benchmark model names must be unique")
+        return self
 
 
 class ModelConfig(BaseModel):
@@ -148,6 +226,7 @@ class ModelConfig(BaseModel):
     xgboost_params: dict[str, Any]
     calibration: CalibrationConfig
     cross_validation: CrossValidationConfig
+    benchmark: BoostingBenchmarkConfig
 
 
 # --------------------------------------------------------------------------- #
@@ -159,10 +238,24 @@ class SplitConfig(BaseModel):
     random_seed: int
 
 
+class MLflowUIConfig(BaseModel):
+    host: str
+    port: int = Field(gt=0, le=65535)
+    workers: int = Field(default=1, ge=1)
+    startup_timeout_seconds: int = Field(default=15, gt=0)
+
+
 class MLflowRunConfig(BaseModel):
     enabled: bool
     tracking_uri: str
+    artifact_uri: str
     experiment_name: str
+    registered_model_name: str
+    champion_alias: str
+    log_system_metrics: bool = True
+    log_dataset_artifacts: bool = True
+    log_model: bool = True
+    ui: MLflowUIConfig
 
 
 class CostMatrixConfig(BaseModel):
@@ -191,18 +284,51 @@ class TrainingConfig(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# configs/data_split.yaml
+# --------------------------------------------------------------------------- #
+class DataSplitOutputConfig(BaseModel):
+    directory: str
+    train_filename: str
+    test_filename: str
+
+
+class DataSplitVisualizationConfig(BaseModel):
+    size: tuple[float, float]
+    path: str
+
+    @field_validator("size")
+    @classmethod
+    def validate_size(cls, value: tuple[float, float]) -> tuple[float, float]:
+        if any(dimension <= 0 for dimension in value):
+            raise ValueError("visualization size dimensions must be strictly positive")
+        return value
+
+
+class StratifiedDataSplitConfig(BaseModel):
+    test_size: float = Field(gt=0, lt=1)
+    random_seed: int
+    output: DataSplitOutputConfig
+    visualization: DataSplitVisualizationConfig
+
+
+# --------------------------------------------------------------------------- #
 # configs/inference.yaml
 # --------------------------------------------------------------------------- #
 class OutputConfig(BaseModel):
     format: str
     directory: str
+    filename: str
     columns: list[str]
 
 
 class InferenceConfig(BaseModel):
     model_version: str
+    require_approved_model: bool
+    input_path: str
     validation: ValidationPolicyConfig
     output: OutputConfig
+    submission_columns: list[str]
+    visualization: DataQualityVisualizationConfig
 
 
 # --------------------------------------------------------------------------- #
@@ -236,6 +362,7 @@ class ProjectConfig(BaseModel):
     features: FeaturesConfig
     model: ModelConfig
     training: TrainingConfig
+    data_split: StratifiedDataSplitConfig
     inference: InferenceConfig
     logging: LoggingConfig
 
@@ -277,10 +404,11 @@ def load_config(
     base = BaseConfig.model_validate(_load_yaml(config_dir / "base.yaml"))
     data = DataConfig.model_validate(_load_yaml(config_dir / "data.yaml"))
     features = FeaturesConfig.model_validate(_load_yaml(config_dir / "features.yaml"))
-    model = ModelConfig.model_validate(
-        _load_yaml(model_config_path or (config_dir / "model.yaml"))
-    )
+    model = ModelConfig.model_validate(_load_yaml(model_config_path or (config_dir / "model.yaml")))
     training = TrainingConfig.model_validate(_load_yaml(config_dir / "training.yaml"))
+    data_split = StratifiedDataSplitConfig.model_validate(
+        _load_yaml(config_dir / "data_split.yaml")
+    )
     inference = InferenceConfig.model_validate(
         _load_yaml(inference_config_path or (config_dir / "inference.yaml"))
     )
@@ -301,6 +429,7 @@ def load_config(
         features=features,
         model=model,
         training=training,
+        data_split=data_split,
         inference=inference,
         logging=logging_cfg,
     )

@@ -1,6 +1,8 @@
 # Batch inference configuration.
 
 model_version: latest # "latest" resolves artifacts/models/latest.json, or an explicit run id
+require_approved_model: true
+input_path: data/processed/test_features.csv
 
 validation:
   strategy: strict # strict | warn | quarantine
@@ -8,7 +10,8 @@ validation:
 
 output:
   format: csv
-  directory: data/predictions
+  directory: data/output
+  filename: submission.csv
   columns:
     - user_id
     - default_probability
@@ -17,3 +20,10 @@ output:
     - risk_band
     - model_version
     - scoring_timestamp
+
+submission_columns:
+  - predicted_label
+  - true_label
+
+visualization:
+  size: [15, 6]

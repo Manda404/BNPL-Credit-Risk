@@ -4,11 +4,23 @@ Batch is the priority use case: score a CSV of applications once a night.
 Realtime scoring reuses the same core (`Predictor`) but no API server is
 built here — see [inference/realtime.py](../src/bnpl_credit_risk/inference/realtime.py).
 
+## Publication prerequisite
+
+Artifacts under `artifacts/benchmarks/` are development results and cannot be
+used for scoring. After notebook `04` selects the best ranking model, notebook
+`05` verifies calibration, freezes the decision threshold, evaluates the
+reserved test once and explicitly publishes an `ArtifactBundle` under
+`artifacts/models/` with `approved_for_inference: true`.
+
+When `require_approved_model` is enabled in `configs/inference.yaml`, notebook
+`06` and the batch pipeline reject legacy or unapproved artifacts. This keeps
+`latest.json` from silently routing scoring to an old experiment.
+
 ## Batch contract
 
 ```bash
 poetry run bnpl-risk predict-batch \
-  --input data/processed/applications_to_score.csv \
+  --input /path/to/applications.csv \
   --output data/predictions/predictions_2026_07_13.csv \
   --model-version latest
 ```
@@ -17,22 +29,39 @@ Steps (`inference/batch.py::BatchPredictor.run`):
 
 1. Resolve `model-version` ("latest" or an explicit run id) via
    `models/registry.py` and load the full `ArtifactBundle`.
-2. Load the input CSV.
-3. If `default_flag` is present in the input, drop it and log a warning — it
+2. Verify that the artifact is approved and inspect its feature contract.
+3. Load the input CSV.
+4. If `default_flag` is present in the input, drop it and log a warning — it
    is **never** required and **never** used.
-4. Clean (dtype coercion, whitespace) and validate against
+5. Clean (dtype coercion, whitespace) and validate against
    `InferenceInputSchema` under the configured policy (`configs/inference.yaml`:
    `strict` / `warn` / `quarantine`).
-5. Score valid rows: `pipeline.predict_proba` (the exact same fitted
+6. Verify the features required by the published artifact and score valid rows
+   with `pipeline.predict_proba` (the exact same fitted
    [feature engineering → encoding → model] object used at training time —
    no re-fitting, ever).
-6. Apply the threshold and risk bands persisted in `threshold.json` at
+7. Apply the threshold and risk bands persisted in `threshold.json` at
    training time (not read from the current `configs/training.yaml`, so a
    config edit after training can't silently change a live model's
    decisions).
-7. Write the output atomically (write to a temp file in the same directory,
+8. Enforce the configured output-column order and write atomically (write to a temp file in the same directory,
    then `os.replace`) so a crash mid-write never leaves a partial file at
    the target path.
+
+### Notebook test submission
+
+Notebook `06` uses `data/processed/test_features.csv` as a labeled evaluation
+partition. `BatchInferencePipeline.run_test_submission` preserves the target in
+a separate Series, delegates scoring to `BatchPredictor` (which drops the target
+before model input), then reconciles rows by `user_id`. It writes exactly two
+columns to `data/output/submission.csv`: `predicted_label` and `true_label`.
+Detailed probabilities and risk bands remain in memory for diagnostics and are
+not added to the requested submission file.
+
+`artifacts/models/latest.json` stores only a version identifier. The registry
+always resolves that identifier relative to the current project artifact
+directory, so moving or cloning the repository cannot leave a stale absolute
+path in the deployment pointer.
 
 ### Output schema
 
@@ -73,7 +102,7 @@ codes, so any of the following can drive it without touching
 
 ```cron
 0 2 * * * cd /path/to/BNPL-Credit-Risk && poetry run bnpl-risk predict-batch \
-  --input data/processed/applications_to_score.csv \
+  --input /path/to/applications.csv \
   --output "data/predictions/predictions_$(date +\%Y_\%m_\%d).csv" \
   >> logs/cron_batch.log 2>&1
 ```

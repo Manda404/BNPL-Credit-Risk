@@ -1,12 +1,12 @@
-"""BNPLFeatureBuilder — reproduces the five engineered features from the
-notebook's Step 4 (payment_stress, income_to_purchase_ratio, age_group,
-txn_month, is_high_risk), hardened against the edge cases the notebook never
-had to face because the raw dataset happens to be clean:
+"""Configuration-driven feature creation for BNPL credit-risk modelling.
 
-- division by zero / negative amounts in income_to_purchase_ratio
-- ages outside the fixed bin range
-- unparseable / missing transaction_date
-- missing risk_score
+Features available at checkout model affordability, repayment burden,
+customer profile and transaction seasonality. Behavioral features are kept
+for post-origination monitoring but excluded from the application-risk scope.
+
+The implementation is hardened against common edge cases such as zero income,
+invalid installment counts, ages outside configured bins, unparseable dates
+and missing behavioral risk scores.
 
 Each `_add_*` method is independently testable and pure (no fitted state),
 which is what makes them safe to call identically at train time and at
@@ -15,17 +15,25 @@ inference time.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
+from bnpl_credit_risk.constants import RISK_SCOPE_APPLICATION
 from bnpl_credit_risk.exceptions import FeatureEngineeringError
 from bnpl_credit_risk.settings import FeaturesConfig
 
 ENGINEERED_FEATURE_COLUMNS = (
     "payment_stress",
-    "income_to_purchase_ratio",
+    "installment_amount",
+    "installment_burden_ratio",
+    "affordability_band",
+    "income_after_installment",
+    "credit_score_band",
     "age_group",
-    "txn_month",
+    "installment_term",
+    "transaction_month_sin",
+    "transaction_month_cos",
     "is_high_risk",
 )
 
@@ -33,30 +41,72 @@ ENGINEERED_FEATURE_COLUMNS = (
 class BNPLFeatureBuilder:
     """Deterministic feature engineering, config-driven and leakage-scope-aware."""
 
-    def __init__(self, features_config: FeaturesConfig, date_column: str = "transaction_date") -> None:
+    def __init__(
+        self,
+        features_config: FeaturesConfig,
+        risk_scope: str,
+        date_column: str = "transaction_date",
+    ) -> None:
         self._config = features_config
+        self._risk_scope = risk_scope
         self._date_column = date_column
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         specs = self._config.engineered_features
 
-        if specs["payment_stress"].enabled:
+        if self._is_enabled("payment_stress"):
             df = self._add_payment_stress(df, specs["payment_stress"].requires)
-        if specs["income_to_purchase_ratio"].enabled:
-            df = self._add_income_to_purchase_ratio(df, specs["income_to_purchase_ratio"].requires)
-        if specs["age_group"].enabled:
+        if self._is_enabled("installment_amount"):
+            df = self._add_installment_amount(df, specs["installment_amount"].requires)
+        if self._is_enabled("installment_burden_ratio"):
+            df = self._add_installment_burden_ratio(
+                df, specs["installment_burden_ratio"].requires
+            )
+        if self._is_enabled("affordability_band"):
+            df = self._add_affordability_band(
+                df,
+                specs["affordability_band"].requires,
+                specs["affordability_band"].bins,
+                specs["affordability_band"].labels,
+            )
+        if self._is_enabled("income_after_installment"):
+            df = self._add_income_after_installment(
+                df, specs["income_after_installment"].requires
+            )
+        if self._is_enabled("credit_score_band"):
+            df = self._add_credit_score_band(
+                df,
+                specs["credit_score_band"].requires,
+                specs["credit_score_band"].bins,
+                specs["credit_score_band"].labels,
+            )
+        if self._is_enabled("age_group"):
             df = self._add_age_group(
                 df, specs["age_group"].requires, specs["age_group"].bins, specs["age_group"].labels
             )
-        if specs["txn_month"].enabled:
-            df = self._add_txn_month(df, specs["txn_month"].requires)
-        if specs["is_high_risk"].enabled:
+        if self._is_enabled("installment_term"):
+            df = self._add_installment_term(
+                df,
+                specs["installment_term"].requires,
+                specs["installment_term"].mapping,
+            )
+        if self._is_enabled("transaction_month_sin") or self._is_enabled(
+            "transaction_month_cos"
+        ):
+            df = self._add_transaction_month_cycle(df)
+        if self._is_enabled("is_high_risk"):
             df = self._add_is_high_risk(
                 df, specs["is_high_risk"].requires, specs["is_high_risk"].risk_score_threshold
             )
 
         return df
+
+    def _is_enabled(self, feature_name: str) -> bool:
+        spec = self._config.engineered_features[feature_name]
+        return spec.enabled and not (
+            self._risk_scope == RISK_SCOPE_APPLICATION and spec.leaky
+        )
 
     def _require_columns(self, df: pd.DataFrame, columns: list[str], feature_name: str) -> None:
         missing = [c for c in columns if c not in df.columns]
@@ -72,12 +122,78 @@ class BNPLFeatureBuilder:
         df["payment_stress"] = (delay * missed).fillna(0.0)
         return df
 
-    def _add_income_to_purchase_ratio(self, df: pd.DataFrame, requires: list[str]) -> pd.DataFrame:
-        self._require_columns(df, requires, "income_to_purchase_ratio")
-        income = pd.to_numeric(df["monthly_income"], errors="coerce").clip(lower=0)
+    def _add_installment_amount(self, df: pd.DataFrame, requires: list[str]) -> pd.DataFrame:
+        """Estimate the amount due for each BNPL installment."""
+        self._require_columns(df, requires, "installment_amount")
         purchase = pd.to_numeric(df["purchase_amount"], errors="coerce").clip(lower=0)
-        # +1 denominator floor avoids division by zero even if purchase_amount is 0.
-        df["income_to_purchase_ratio"] = income / (purchase + 1)
+        installments = pd.to_numeric(df["bnpl_installments"], errors="coerce")
+        valid_installments = installments.where(installments > 0)
+        df["installment_amount"] = purchase / valid_installments
+        return df
+
+    def _add_installment_burden_ratio(
+        self, df: pd.DataFrame, requires: list[str]
+    ) -> pd.DataFrame:
+        """Measure the share of monthly income consumed by one installment."""
+        self._require_columns(df, requires, "installment_burden_ratio")
+        purchase = pd.to_numeric(df["purchase_amount"], errors="coerce").clip(lower=0)
+        installments = pd.to_numeric(df["bnpl_installments"], errors="coerce")
+        income = pd.to_numeric(df["monthly_income"], errors="coerce").clip(lower=0)
+        installment_amount = purchase / installments.where(installments > 0)
+        df["installment_burden_ratio"] = installment_amount / income.where(income > 0)
+        return df
+
+    def _add_affordability_band(
+        self,
+        df: pd.DataFrame,
+        requires: list[str],
+        bins: list[float] | None,
+        labels: list[str] | None,
+    ) -> pd.DataFrame:
+        """Translate installment burden into an interpretable policy band."""
+        self._require_columns(df, requires, "affordability_band")
+        if not bins or not labels:
+            raise FeatureEngineeringError(
+                "affordability_band requires 'bins' and 'labels' in configs/features.yaml"
+            )
+
+        burden = pd.to_numeric(df["installment_burden_ratio"], errors="coerce")
+        band = pd.cut(burden, bins=bins, labels=labels, include_lowest=True)
+        df["affordability_band"] = band.astype(object).fillna("Unknown")
+        return df
+
+    def _add_income_after_installment(
+        self, df: pd.DataFrame, requires: list[str]
+    ) -> pd.DataFrame:
+        """Estimate monthly income remaining after one BNPL installment."""
+        self._require_columns(df, requires, "income_after_installment")
+        income = pd.to_numeric(df["monthly_income"], errors="coerce").clip(lower=0)
+        installment = pd.to_numeric(df["installment_amount"], errors="coerce")
+        df["income_after_installment"] = income - installment
+        return df
+
+    def _add_credit_score_band(
+        self,
+        df: pd.DataFrame,
+        requires: list[str],
+        bins: list[float] | None,
+        labels: list[str] | None,
+    ) -> pd.DataFrame:
+        """Convert the bureau score into configurable, interpretable bands."""
+        self._require_columns(df, requires, "credit_score_band")
+        if not bins or not labels:
+            raise FeatureEngineeringError(
+                "credit_score_band requires 'bins' and 'labels' in configs/features.yaml"
+            )
+
+        credit_score = pd.to_numeric(df["credit_score"], errors="coerce")
+        score_band = pd.cut(
+            credit_score,
+            bins=bins,
+            labels=labels,
+            include_lowest=True,
+        )
+        df["credit_score_band"] = score_band.astype(object).fillna("Unknown")
         return df
 
     def _add_age_group(
@@ -100,17 +216,41 @@ class BNPLFeatureBuilder:
         df["age_group"] = age_group.astype(object).where(~out_of_range, "Unknown").fillna("Unknown")
         return df
 
-    def _add_txn_month(self, df: pd.DataFrame, requires: list[str]) -> pd.DataFrame:
-        self._require_columns(df, requires, "txn_month")
+    def _add_installment_term(
+        self,
+        df: pd.DataFrame,
+        requires: list[str],
+        mapping: dict[int, str] | None,
+    ) -> pd.DataFrame:
+        """Map supported installment counts to business-friendly term labels."""
+        self._require_columns(df, requires, "installment_term")
+        if not mapping:
+            raise FeatureEngineeringError(
+                "installment_term requires 'mapping' in configs/features.yaml"
+            )
+
+        installments = pd.to_numeric(df["bnpl_installments"], errors="coerce")
+        df["installment_term"] = installments.map(mapping).fillna("Unknown")
+        return df
+
+    def _add_transaction_month_cycle(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Encode month seasonality without creating an artificial 1→12 order."""
+        self._require_columns(df, [self._date_column], "transaction_month_cycle")
         parsed = pd.to_datetime(df[self._date_column], errors="coerce")
-        invalid = parsed.isna()
+        month = parsed.dt.month.astype(float)
+        invalid = month.isna()
         if invalid.any():
             logger.bind(pipeline="features.builder").warning(
-                "{} row(s) have an unparseable {} — txn_month set to 0",
+                "{} row(s) have an unparseable {} — cyclical month features set to 0",
                 int(invalid.sum()),
                 self._date_column,
             )
-        df["txn_month"] = parsed.dt.month.fillna(0).astype(int)
+
+        angle = 2 * np.pi * month / 12
+        if self._is_enabled("transaction_month_sin"):
+            df["transaction_month_sin"] = np.sin(angle).where(~invalid, 0.0)
+        if self._is_enabled("transaction_month_cos"):
+            df["transaction_month_cos"] = np.cos(angle).where(~invalid, 0.0)
         return df
 
     def _add_is_high_risk(

@@ -21,9 +21,22 @@ split:
   random_seed: 42
 
 mlflow:
-  enabled: false
-  tracking_uri: "file:./mlruns"
-  experiment_name: bnpl-credit-risk
+  enabled: true
+  # Shared platform used by all local ML projects. Nothing is written to this
+  # repository's own directory.
+  tracking_uri: "sqlite:////Users/surelmanda/.mlflow/mlflow.db"
+  artifact_uri: "file:///Users/surelmanda/.mlflow/artifacts"
+  experiment_name: bnpl_credit_risk
+  registered_model_name: bnpl_credit_risk_default_model
+  champion_alias: champion
+  log_system_metrics: true
+  log_dataset_artifacts: true
+  log_model: true
+  ui:
+    host: "127.0.0.1"
+    port: 5000
+    workers: 1
+    startup_timeout_seconds: 15
 
 threshold:
   # fixed | best_f1 | min_recall | min_precision | cost_matrix

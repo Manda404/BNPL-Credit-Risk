@@ -31,3 +31,29 @@ cross_validation:
   enabled: true
   n_splits: 5
   shuffle: true
+  early_stopping_rounds: 50
+
+benchmark:
+  models: [XGBoost, LightGBM, CatBoost]
+  selection_metric: ROC-AUC
+  comparison_threshold: 0.5
+  artifact_subdirectory: benchmarks
+  threshold_grid_start: 0.02
+  threshold_grid_stop: 1.0
+  threshold_grid_step: 0.04
+  lightgbm_params:
+    n_estimators: 300
+    learning_rate: 0.05
+    objective: binary
+    verbosity: -1
+  catboost_params:
+    iterations: 300
+    learning_rate: 0.05
+    loss_function: Logloss
+    verbose: false
+    allow_writing_files: false
+  visualization:
+    size: [15, 6]
+    top_n_features: 15
+    shap_sample_size: 500
+    shap_top_n: 12

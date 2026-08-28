@@ -18,6 +18,7 @@ from bnpl_credit_risk.data.loaders import BNPLDataLoader
 from bnpl_credit_risk.data.schemas import training_input_schema
 from bnpl_credit_risk.data.validation import BNPLDataValidator
 from bnpl_credit_risk.features.builder import BNPLFeatureBuilder
+from bnpl_credit_risk.features.leakage import BNPLLeakageGuard
 from bnpl_credit_risk.logging import configure_logging
 from bnpl_credit_risk.settings import get_settings, load_config
 
@@ -38,7 +39,17 @@ def main(
     validation = BNPLDataValidator(schema, config.data.validation.strategy).validate(df)
     df = validation.valid
 
-    builder = BNPLFeatureBuilder(config.features, date_column=config.data.date_column)
+    leakage_result = BNPLLeakageGuard(
+        config.features,
+        config.model.risk_scope,
+    ).apply(df)
+    df = leakage_result.cleaned
+
+    builder = BNPLFeatureBuilder(
+        config.features,
+        risk_scope=config.model.risk_scope,
+        date_column=config.data.date_column,
+    )
     df = builder.transform(df)
 
     output_path = output or (settings.resolve(config.base.paths.data_processed) / "bnpl_features.csv")

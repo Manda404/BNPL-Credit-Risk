@@ -12,11 +12,11 @@ Source: [Dev/bnpl-credit-risk-eda-feature-engineering-xgboost.ipynb](../Dev/bnpl
 | Cell 5 — target distribution pie/bar | `visualization/eda.py` | `plot_target_distribution` |
 | Cell 7 — age histogram, income boxplot by target | `visualization/eda.py` | `plot_numeric_by_target` |
 | Cell 8 — default rate by employment / product category | `visualization/eda.py` | `plot_default_rate_by_category` |
-| Cell 9 — credit score histogram, risk score by segment | `visualization/eda.py` | `plot_numeric_by_target`, `plot_risk_score_by_segment` |
+| Cell 9 — credit score histogram, risk score by segment | `visualization/eda.py` | `plot_numeric_by_target`; the risk-score visual was retired after the leakage audit |
 | Cell 10 — default rate by country / installments | `visualization/eda.py` | `plot_default_rate_by_category`, `plot_default_rate_by_installments` |
 | Cell 11 — correlation heatmap | `visualization/eda.py` | `plot_correlation_heatmap` |
-| Cell 12 — default rate by missed payments / delay bins | `visualization/eda.py` | `plot_default_rate_by_missed_payments`, `plot_default_rate_by_delay_bins` |
-| Cell 15 — `payment_stress`, `income_to_purchase_ratio`, `age_group`, `txn_month`, `is_high_risk` | `features/builder.py` | `BNPLFeatureBuilder` |
+| Cell 12 — default rate by missed payments / delay bins | `visualization/eda.py` | Retired: post-origination timing, not a chart, establishes leakage |
+| Cell 15 — original engineered features | `features/builder.py` | `BNPLFeatureBuilder`, extended with checkout-time affordability, term and cyclical seasonality features |
 | Cell 15 — `LabelEncoder` loop over categoricals | `features/preprocessing.py` | `build_preprocessing_pipeline` (`ColumnTransformer` + `OneHotEncoder`) |
 | Cell 17 — feature/target split, `scale_pos_weight`, `train_test_split` | `data/splitting.py`, `models/trainer.py` | `get_splitter`, `ModelTrainer.compute_scale_pos_weight` |
 | Cell 17 — `XGBClassifier(...)` + `.fit(...)` | `models/factory.py`, `models/trainer.py` | `ModelFactory`, `ModelTrainer.train` |
@@ -24,6 +24,13 @@ Source: [Dev/bnpl-credit-risk-eda-feature-engineering-xgboost.ipynb](../Dev/bnpl
 | Cell 20 — confusion matrix, ROC curve plots | `visualization/evaluation.py` | `plot_confusion_matrix`, `plot_roc_curve` |
 | Cell 21 — feature importance plot | `visualization/evaluation.py` | `plot_feature_importance` |
 | Cell 22 — `StratifiedKFold` cross-validation | `pipelines/training_pipeline.py` | inlined, corrected to run on the train split only |
+| Notebook 04 — three native boosting candidates | `models/boosting.py`, `pipelines/boosting_benchmark_pipeline.py` | `BoostingBenchmark`, `BoostingBenchmarkPipeline` |
+| Notebook 04 — repeated comparison figures | `visualization/boosting.py` | `BoostingBenchmarkVisualizer` |
+| Notebook 05 — calibration, threshold, lift and gains | `evaluation/diagnostics.py`, `pipelines/boosting_evaluation_pipeline.py` | `BoostingEvaluationPipeline`, `ThresholdTradeoffAnalyzer` |
+| Notebook 05 — feature importance and SHAP views | `visualization/model_diagnostics.py` | `ModelDiagnosticsVisualizer` |
+| Notebook 05 — publish the approved winner | `pipelines/boosting_evaluation_pipeline.py`, `models/persistence.py` | `BoostingEvaluationPipeline.publish`, `ArtifactBundle` |
+| Notebook 06 — target-free batch scoring | `pipelines/batch_inference_pipeline.py`, `inference/batch.py` | `BatchInferencePipeline`, `BatchPredictor` |
+| Notebook 06 — portfolio inference overview | `visualization/inference.py` | `BatchInferenceVisualizer` |
 | *(absent from notebook)* | `evaluation/thresholding.py`, `evaluation/business_metrics.py` | `ThresholdSelector`, `business_cost` |
 | *(absent from notebook)* | `models/calibration.py`, `visualization/calibration.py` | `ProbabilityCalibrator`, calibration curve plots |
 | *(absent from notebook)* | `models/persistence.py`, `models/registry.py` | `ArtifactBundle`, `resolve_model_dir` |
@@ -52,7 +59,7 @@ dataset and asserts:
 
 - Raw shape matches (10,345 rows × 17 columns).
 - Default rate matches (~39.05%).
-- The five engineered feature columns are produced.
+- The configured engineered feature columns are produced.
 - ROC-AUC on the held-out test split lands within 0.03 of a reference value
   (0.7769) obtained by re-running the notebook's own `LabelEncoder` +
   `train_test_split` + `XGBClassifier` logic line-for-line. The package's own

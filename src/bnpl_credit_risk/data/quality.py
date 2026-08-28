@@ -5,17 +5,27 @@ component instead of ad-hoc `print()` statements.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from loguru import logger
 
+from bnpl_credit_risk.data.profiling import DatasetInspector, DatasetProfileOptions
+
 
 class DataQualityReport:
     """Computes and serializes a data health summary for a dataframe."""
 
-    def __init__(self, target_column: str | None = None) -> None:
+    def __init__(
+        self,
+        target_column: str | None = None,
+        size: tuple[float, float] = (12, 8),
+    ) -> None:
+        if any(dimension <= 0 for dimension in size):
+            raise ValueError("DataQualityReport size dimensions must be strictly positive")
         self._target_column = target_column
+        self._size = size
 
     def build(self, df: pd.DataFrame) -> dict[str, Any]:
         report: dict[str, Any] = {
@@ -37,6 +47,57 @@ class DataQualityReport:
             }
 
         return report
+
+    def profile_dataset(
+        self,
+        df: pd.DataFrame,
+        *,
+        numeric_examples: int = 5,
+        categorical_examples: int = 10,
+        iqr_multiplier: float = 1.5,
+    ) -> pd.DataFrame:
+        """Return a detailed, column-level quality profile.
+
+        Numeric outliers are detected with Tukey's IQR rule: values below
+        ``Q1 - 1.5 * IQR`` or above ``Q3 + 1.5 * IQR``. ``% Outliers`` uses
+        the number of finite numeric observations as its denominator.
+
+        Parameters
+        ----------
+        df:
+            Dataset to profile.
+        numeric_examples:
+            Maximum representative values shown for numeric/date columns.
+        categorical_examples:
+            Maximum representative values shown for categorical columns.
+        iqr_multiplier:
+            Tukey multiplier used to define numeric outlier fences.
+        """
+        options = DatasetProfileOptions(
+            numeric_examples=numeric_examples,
+            categorical_examples=categorical_examples,
+            iqr_multiplier=iqr_multiplier,
+        )
+        return DatasetInspector(options).inspect(df)
+
+    def show(self, df: pd.DataFrame, save_path: str | Path | None = None) -> None:
+        """Build and display the visual quality dashboard for ``df``.
+
+        The plotting dependency is imported lazily so pipelines that only use
+        :meth:`build` or :meth:`log` do not need to initialize Matplotlib. The
+        method returns ``None`` so Jupyter does not render the figure twice.
+        """
+        import matplotlib.pyplot as plt
+
+        from bnpl_credit_risk.visualization.quality import plot_data_quality_report
+
+        plot_data_quality_report(
+            self.build(df),
+            size=self._size,
+            save_path=save_path,
+        )
+        if save_path is None:
+            plt.show()
 
     def log(self, report: dict[str, Any], *, pipeline: str = "data.quality") -> None:
         log = logger.bind(pipeline=pipeline)

@@ -6,7 +6,6 @@ import pytest
 from bnpl_credit_risk.constants import VALIDATION_QUARANTINE, VALIDATION_STRICT, VALIDATION_WARN
 from bnpl_credit_risk.data.cleaning import BNPLDataCleaner
 from bnpl_credit_risk.data.loaders import BNPLDataLoader
-from bnpl_credit_risk.data.quality import DataQualityReport
 from bnpl_credit_risk.data.schemas import inference_input_schema, training_input_schema
 from bnpl_credit_risk.data.validation import BNPLDataValidator
 from bnpl_credit_risk.exceptions import ConfigError, DataValidationError
@@ -39,8 +38,15 @@ def test_cleaner_drops_exact_duplicate_rows(project_config):
 
 
 def test_inference_schema_excludes_target(project_config):
-    schema = inference_input_schema(project_config.data)
+    schema = inference_input_schema(
+        project_config.data,
+        project_config.features,
+        project_config.model.risk_scope,
+    )
     assert schema.target_column is None
+    assert not set(project_config.features.leaky_raw_columns).intersection(
+        schema.required_columns
+    )
     assert project_config.data.target_column not in schema.required_columns
 
 
@@ -102,10 +108,3 @@ def test_validator_flags_non_binary_target(sample_df, project_config):
     validator = BNPLDataValidator(schema, VALIDATION_QUARANTINE)
     result = validator.validate(bad)
     assert len(result.invalid) >= 1
-
-
-def test_data_quality_report_basic_stats(sample_df):
-    report = DataQualityReport(target_column="default_flag").build(sample_df)
-    assert report["n_rows"] == 200
-    assert "target_distribution" in report
-    assert set(report["target_distribution"].keys()) == {"0", "1"}

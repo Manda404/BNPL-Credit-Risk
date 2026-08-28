@@ -4,6 +4,19 @@ validation:
   strategy: strict
   quarantine_output_dir: data/reports
 
+quality_report:
+  visualization:
+    size: [15, 8]
+
+exploratory_analysis:
+  visualization:
+    size: [15, 6]
+
+drift:
+  warning_psi: 0.10
+  critical_psi: 0.25
+  recent_fraction: 0.20
+
 id_column: user_id
 target_column: default_flag
 date_column: transaction_date

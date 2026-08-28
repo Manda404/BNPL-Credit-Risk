@@ -31,7 +31,8 @@ Two schemas are derived from this table (`bnpl_credit_risk.data.schemas`):
 - **`TrainingInputSchema`** — requires `default_flag`, validates it's binary.
 - **`InferenceInputSchema`** — does **not** require `default_flag`. If a batch
   input file happens to include it, `BatchPredictor` drops it before scoring
-  and logs a warning — it is never read.
+  and logs a warning — it is never read. Under `application_risk`, it also does
+  not require any configured post-origination leakage column.
 
 ## Validation policy
 
@@ -45,6 +46,31 @@ Configurable per `configs/data.yaml` / `configs/inference.yaml` (`validation.str
 Structural violations (a required column entirely missing, or the date column
 entirely unparseable) always abort, regardless of policy — there's no
 sensible way to quarantine a missing column.
+
+## Stratified train/test export
+
+For workflows that explicitly need materialized CSV partitions, run:
+
+```bash
+poetry run python scripts/split_data.py
+```
+
+This validates the source dataset, performs a reproducible split stratified on
+`default_flag` (`90%` train, `10%` test, seed `42`), and writes:
+
+- `data/raw/train.csv`
+- `data/raw/test.csv`
+- `artifacts/figures/data_split_target_distribution.png`
+
+Implementation: `data/partitioning.py`, orchestrated by
+`pipelines/data_split_pipeline.py`. The pipeline receives the dataframe to
+split explicitly; the command-line script is responsible for loading and
+cleaning the source CSV. Proportion, seed, output files and visualization are
+defined in `configs/data_split.yaml`; notebooks do not redefine them. The
+export is intentionally separate from
+the production model's default `time_based` evaluation protocol: a random
+stratified split preserves class proportions, but it does not simulate scoring
+future applications from past data.
 
 ## Leakage audit
 
@@ -67,11 +93,30 @@ Two engineered features inherit the leakage transitively:
 - `payment_stress` = `repayment_delay_days × missed_payments` — leaky by construction.
 - `is_high_risk` = `risk_score > 250` — leaky by construction.
 
+For the default `application_risk` scope, `BNPLLeakageGuard` removes the four
+raw columns from both partitions after validation and before feature
+engineering. The notebook workflow materializes the safe copies as:
+
+- `data/interim/train_application.csv`
+- `data/interim/test_application.csv`
+
+The original `data/raw/train.csv` and `data/raw/test.csv` remain unchanged for
+auditability. The feature builder also skips `payment_stress` and
+`is_high_risk`, so transitive leakage cannot be recreated from removed inputs.
+
 **Everything else** (`age`, `employment_type`, `monthly_income`, `credit_score`,
 `purchase_amount`, `product_category`, `bnpl_installments`, `app_usage_frequency`,
-`location`, `debt_to_income_ratio`, and the engineered `income_to_purchase_ratio`,
-`age_group`, `txn_month`) is information a merchant already has at checkout,
-before any repayment behavior exists.
+`location`, `debt_to_income_ratio`, and the engineered `installment_amount`,
+`installment_burden_ratio`, `affordability_band`, `income_after_installment`,
+`credit_score_band`, `age_group`, `installment_term`,
+`transaction_month_sin` and `transaction_month_cos`) is information a merchant
+already has at checkout, before any repayment behavior exists.
+
+In the current source dataset, `debt_to_income_ratio` is exactly equal to
+`purchase_amount / monthly_income`. It is retained as a source-contract field,
+but no reciprocal ratio is engineered because that would duplicate the same
+signal. `installment_burden_ratio` instead measures the amount of one scheduled
+installment relative to monthly income.
 
 ### Two model configurations, not one
 

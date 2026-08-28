@@ -16,13 +16,14 @@ from datetime import datetime
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from loguru import logger
 from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_val_score
 
 from bnpl_credit_risk.data.cleaning import BNPLDataCleaner
 from bnpl_credit_risk.data.loaders import BNPLDataLoader
 from bnpl_credit_risk.data.quality import DataQualityReport
-from bnpl_credit_risk.data.schemas import training_input_schema
+from bnpl_credit_risk.data.schemas import inference_input_schema, training_input_schema
 from bnpl_credit_risk.data.splitting import get_splitter
 from bnpl_credit_risk.data.validation import BNPLDataValidator
 from bnpl_credit_risk.evaluation.evaluator import ClassificationEvaluator
@@ -30,10 +31,12 @@ from bnpl_credit_risk.evaluation.thresholding import ThresholdSelector
 from bnpl_credit_risk.exceptions import ConfigError, DataValidationError
 from bnpl_credit_risk.features.builder import resolve_feature_columns
 from bnpl_credit_risk.features.feature_names import get_feature_importances
+from bnpl_credit_risk.features.leakage import BNPLLeakageGuard
 from bnpl_credit_risk.models.calibration import ProbabilityCalibrator
 from bnpl_credit_risk.models.persistence import ArtifactBundle, current_git_commit
 from bnpl_credit_risk.models.trainer import ModelTrainer
 from bnpl_credit_risk.settings import ProjectConfig, Settings
+from bnpl_credit_risk.tracking.mlflow_tracker import MLflowTracker
 from bnpl_credit_risk.visualization.calibration import (
     plot_calibration_comparison,
     plot_calibration_curve,
@@ -54,43 +57,116 @@ class TrainingPipelineResult:
     cv_summary: dict[str, Any]
 
 
-def run_training_pipeline(config: ProjectConfig, settings: Settings) -> TrainingPipelineResult:
+def run_training_pipeline(
+    config: ProjectConfig,
+    settings: Settings,
+    *,
+    train_df: pd.DataFrame | None = None,
+    test_df: pd.DataFrame | None = None,
+) -> TrainingPipelineResult:
+    """Train from the configured raw source or explicit prepared partitions.
+
+    Passing both partitions lets the progressive notebook workflow consume
+    the materialized outputs of feature engineering. The persisted sklearn
+    pipeline still recomputes deterministic features, which keeps inference
+    behavior identical when it later receives raw checkout-time inputs.
+    """
     log = logger.bind(pipeline="pipelines.training")
-    log.info("Starting training pipeline risk_scope={} split={}", config.model.risk_scope, config.training.split.strategy)
+    prepared_partitions = train_df is not None or test_df is not None
+    if (train_df is None) != (test_df is None):
+        raise ConfigError("train_df and test_df must be provided together")
 
-    # 1-6: load, clean, validate, quality report
-    loader = BNPLDataLoader(settings, config.data)
-    cleaner = BNPLDataCleaner(config.data)
     quality = DataQualityReport(target_column=config.data.target_column)
-
-    df = loader.load_raw()
-    df = cleaner.clean(df)
-    report = quality.build(df)
-    quality.log(report)
-
-    schema = training_input_schema(config.data)
-    validator = BNPLDataValidator(schema, config.data.validation.strategy)
-    try:
-        validation_result = validator.validate(df)
-    except DataValidationError as exc:
-        log.error("Training aborted: data contract violated under strict policy: {}", exc)
-        raise
-
-    df = validation_result.valid
-    if len(validation_result.invalid):
-        log.warning("Excluding {} invalid row(s) from training", len(validation_result.invalid))
-
-    # 7-8: features/target split, train/test split
     target_column = config.data.target_column
-    splitter = get_splitter(
-        config.training.split.strategy,
-        config.training.split,
-        id_column=config.data.id_column,
-        date_column=config.data.date_column,
-        target_column=target_column,
-    )
-    train_df, test_df = splitter.split(df)
-    log.info("Split strategy={} train_rows={} test_rows={}", config.training.split.strategy, len(train_df), len(test_df))
+
+    if prepared_partitions:
+        assert train_df is not None and test_df is not None
+        train_df = train_df.copy()
+        test_df = test_df.copy()
+        for partition_name, partition in (("train", train_df), ("test", test_df)):
+            if target_column not in partition.columns:
+                raise DataValidationError(
+                    f"Target column '{target_column}' is missing from prepared {partition_name} partition"
+                )
+
+        train_df = BNPLLeakageGuard(config.features, config.model.risk_scope).apply(
+            train_df
+        ).cleaned
+        test_df = BNPLLeakageGuard(config.features, config.model.risk_scope).apply(
+            test_df
+        ).cleaned
+        if list(train_df.columns) != list(test_df.columns):
+            raise DataValidationError(
+                "Prepared train and test partitions do not have the same columns"
+            )
+
+        report = quality.build(pd.concat([train_df, test_df], ignore_index=True))
+        quality.log(report)
+        effective_split_strategy = "prepared_partitions"
+        effective_test_size = len(test_df) / (len(train_df) + len(test_df))
+        log.info(
+            "Starting training from prepared partitions risk_scope={} train_rows={} test_rows={}",
+            config.model.risk_scope,
+            len(train_df),
+            len(test_df),
+        )
+    else:
+        log.info(
+            "Starting training pipeline risk_scope={} split={}",
+            config.model.risk_scope,
+            config.training.split.strategy,
+        )
+
+        # Load, clean, validate and remove leakage from the configured raw source.
+        loader = BNPLDataLoader(settings, config.data)
+        cleaner = BNPLDataCleaner(config.data)
+
+        df = cleaner.clean(loader.load_raw())
+        report = quality.build(df)
+        quality.log(report)
+
+        schema = training_input_schema(config.data)
+        validator = BNPLDataValidator(schema, config.data.validation.strategy)
+        try:
+            validation_result = validator.validate(df)
+        except DataValidationError as exc:
+            log.error("Training aborted: data contract violated under strict policy: {}", exc)
+            raise
+
+        df = validation_result.valid
+        if len(validation_result.invalid):
+            log.warning(
+                "Excluding {} invalid row(s) from training",
+                len(validation_result.invalid),
+            )
+
+        leakage_result = BNPLLeakageGuard(
+            config.features,
+            config.model.risk_scope,
+        ).apply(df)
+        df = leakage_result.cleaned
+        if leakage_result.removed_columns:
+            log.warning(
+                "Removed leakage columns before training: {}",
+                leakage_result.removed_columns,
+            )
+
+        splitter = get_splitter(
+            config.training.split.strategy,
+            config.training.split,
+            id_column=config.data.id_column,
+            date_column=config.data.date_column,
+            target_column=target_column,
+        )
+        train_df, test_df = splitter.split(df)
+        effective_split_strategy = config.training.split.strategy
+        effective_test_size = config.training.split.test_size
+        log.info(
+            "Split strategy={} train_rows={} test_rows={}",
+            effective_split_strategy,
+            len(train_df),
+            len(test_df),
+        )
 
     X_train, y_train = train_df.drop(columns=[target_column]), train_df[target_column]
     X_test, y_test = test_df.drop(columns=[target_column]), test_df[target_column]
@@ -176,12 +252,14 @@ def run_training_pipeline(config: ProjectConfig, settings: Settings) -> Training
     metadata = {
         "version": version,
         "trained_at": datetime.now().isoformat(),
+        "approved_for_inference": True,
+        "workflow": "training_pipeline",
         "risk_scope": config.model.risk_scope,
         "algorithm": config.model.algorithm,
         "xgboost_params": {**config.model.xgboost_params, "scale_pos_weight": scale_pos_weight},
         "calibration": config.model.calibration.model_dump(),
-        "split_strategy": config.training.split.strategy,
-        "test_size": config.training.split.test_size,
+        "split_strategy": effective_split_strategy,
+        "test_size": effective_test_size,
         "random_seed": config.base.random_seed,
         "n_train_rows": len(X_train),
         "n_test_rows": len(X_test),
@@ -196,6 +274,11 @@ def run_training_pipeline(config: ProjectConfig, settings: Settings) -> Training
     feature_schema = {
         "schema_version": "1.0",
         "risk_scope": config.model.risk_scope,
+        "input_features": inference_input_schema(
+            config.data,
+            config.features,
+            config.model.risk_scope,
+        ).required_columns,
         "input_numeric_features": numeric_features,
         "input_categorical_features": categorical_features,
         "output_feature_names": feature_names,
@@ -212,8 +295,12 @@ def run_training_pipeline(config: ProjectConfig, settings: Settings) -> Training
     models_dir = settings.resolve(settings.artifacts_dir) / "models"
     version_dir = bundle.save(models_dir)
 
-    if config.training.mlflow.enabled:
-        _log_to_mlflow(config, metadata, metrics_payload, threshold_result, version_dir)
+    MLflowTracker(config).log_training_pipeline(
+        metadata=metadata,
+        metrics=metrics_payload,
+        threshold=threshold_result,
+        artifact_dir=version_dir,
+    )
 
     log.info(
         "Training pipeline complete version={} test_roc_auc={:.4f} test_brier={:.4f} threshold={:.3f}",
@@ -227,21 +314,3 @@ def run_training_pipeline(config: ProjectConfig, settings: Settings) -> Training
         version_dir=str(version_dir), version=version, test_metrics=test_metrics,
         threshold=threshold_result, cv_summary=cv_summary,
     )
-
-
-def _log_to_mlflow(config: ProjectConfig, metadata: dict, metrics: dict, threshold: dict, version_dir) -> None:
-    try:
-        import mlflow
-    except ImportError as exc:
-        raise ConfigError(
-            "training.mlflow.enabled=true but the 'mlflow' extra is not installed. "
-            "Install it with: poetry install --extras mlflow"
-        ) from exc
-
-    mlflow.set_tracking_uri(config.training.mlflow.tracking_uri)
-    mlflow.set_experiment(config.training.mlflow.experiment_name)
-    with mlflow.start_run(run_name=metadata["version"]):
-        mlflow.log_params({"risk_scope": metadata["risk_scope"], **metadata["xgboost_params"]})
-        mlflow.log_metrics({k: v for k, v in metrics["test"].items() if isinstance(v, int | float)})
-        mlflow.log_dict(threshold, "threshold.json")
-        mlflow.log_artifacts(str(version_dir))

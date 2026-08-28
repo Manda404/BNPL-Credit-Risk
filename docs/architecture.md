@@ -5,7 +5,7 @@
 ```
 configs/       YAML configuration (paths, data contract, features, model, training, inference, logging)
 data/          raw / interim / processed / predictions / reports
-artifacts/     models / preprocessors / metrics / figures / schemas (versioned outputs of training)
+artifacts/     models / benchmarks / metrics / figures / schemas (versioned outputs)
 notebooks/     thin consumers of the package (00-06)
 scripts/       plain-Python entry points for cron/CI, wrapping the CLI commands
 src/bnpl_credit_risk/
@@ -20,6 +20,7 @@ src/bnpl_credit_risk/
 ├── evaluation/              metrics, thresholding, business cost, reports
 ├── visualization/           EDA / evaluation / calibration plots
 ├── pipelines/               orchestration: validation / training / evaluation / batch inference
+├── tracking/                MLflow experiment tracking for comparison and approval
 └── inference/                Predictor (core), batch, realtime
 tests/
 ├── unit/          one module, one behavior at a time
@@ -30,22 +31,36 @@ tests/
 ## Module responsibilities
 
 - **`data`** answers "is this dataframe safe to use, and in what shape?" —
-  nothing here trains anything or computes a prediction.
+  including reusable profiling and stratified train/test export. Nothing here
+  trains anything or computes a prediction.
 - **`features`** answers "given a safe dataframe, what does the model see?" —
   `BNPLFeatureBuilder` is pure pandas (deterministic, no fitted state);
   `preprocessing.build_preprocessing_pipeline` wraps it plus a
   `ColumnTransformer` into one fittable `sklearn.Pipeline`.
-- **`models`** answers "how do we produce and persist a fitted pipeline?" —
-  `ModelTrainer` composes the preprocessing pipeline with an XGBoost step and
-  fits it on train data only; `ArtifactBundle` is the sole persistence format.
+- **`models`** answers "how do we fit, compare and persist estimators?" —
+  `ModelTrainer` owns the production sklearn pipeline, while
+  `BoostingBenchmark` compares XGBoost, LightGBM and CatBoost with native
+  categorical support. `BoostingBenchmarkStore` persists the development
+  hand-off between notebooks `04` and `05`.
 - **`evaluation`** answers "how good is this pipeline, and at what threshold?"
-  — pure functions over `(y_true, y_prob)`, no I/O, no side effects.
-- **`visualization`** turns evaluation/EDA data into `Figure` objects. Never
+  — pure functions over `(y_true, y_prob)`, including calibration bins,
+  threshold trade-offs, lift and cumulative gains; no I/O or side effects.
+- **`visualization`** turns evaluation/EDA data into `Figure` objects, including
+  consistent boosting dashboards and native TreeSHAP views. Never
   calls `plt.show()`; always closable via `save_and_close`, so the same
   functions work interactively in a notebook and unattended in a pipeline.
 - **`pipelines`** is where the modules above get wired into complete,
-  runnable procedures (validate / train / evaluate / batch-infer). This is
-  the only layer that knows the *order* of operations.
+  runnable procedures (validate / leakage control / feature materialization /
+  train / evaluate / batch-infer). This is the only layer that knows the
+  *order* of operations. `BoostingBenchmarkPipeline` owns model comparison;
+  `BoostingEvaluationPipeline` owns post-selection diagnostics. The progressive notebook flow writes leakage-safe
+  partitions to `data/interim` and their deterministic feature-enriched
+  counterparts to `data/processed`.
+- **`tracking`** records the model lifecycle in MLflow. Notebook `04` creates
+  one comparison parent run with nested XGBoost, LightGBM and CatBoost runs;
+  notebook `05` records the approved winner and its final diagnostics. A local
+  SQLite backend and its artifacts live in the shared user-level platform
+  `/Users/surelmanda/.mlflow`, outside every Git repository.
 - **`inference`** is IO-agnostic scoring (`Predictor`) plus a file-based
   wrapper (`BatchPredictor`) — the core scoring path a future realtime API
   would reuse without duplicating logic.
@@ -63,11 +78,19 @@ inference time. There is no second code path that re-implements encoding or
 feature engineering for scoring; `Predictor.predict_proba` is a single call
 to `pipeline.predict_proba`.
 
+The native boosting benchmark is a development experiment, not a second
+production inference contract. Its versioned `benchmark.joblib` preserves OOF
+predictions, the winning estimator and its training-only categorical vocabulary
+between notebooks `04` and `05`. Once the experiment is accepted, the production
+artifact still has to be published through `ArtifactBundle` before notebook `06`.
+That explicit publication cell in notebook `05` records the approval flag,
+selected native categorical adapter, frozen threshold, risk bands, metrics and
+feature schema. `BatchInferencePipeline` can then refuse unapproved artifacts.
+
 ## Configuration flow
 
 1. `bnpl_credit_risk.settings.Settings` (pydantic-settings) reads environment
-   variables / `.env` — machine-specific overrides (paths, log level, MLflow
-   on/off).
+   variables / `.env` — machine-specific overrides (paths and log level).
 2. `bnpl_credit_risk.settings.load_config` reads `configs/*.yaml` into typed
    Pydantic models (`ProjectConfig`), validated against the enums in
    `constants.py`.
