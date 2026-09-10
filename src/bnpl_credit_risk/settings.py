@@ -2,8 +2,8 @@
 
 Two layers are kept deliberately separate:
 
-- `Settings` (pydantic-settings): environment-driven, read from `.env` / real
-  env vars. Machine/deployment-specific (paths overrides and log level).
+- `Settings` (pydantic-settings): typed defaults for paths, log level and random
+  seed, with optional overrides from `.env` / real environment variables.
 - `*Config` models below: read from `configs/*.yaml`. Pipeline-specific,
   versioned in git, meant to be reviewed like code.
 
@@ -41,7 +41,10 @@ def project_root() -> Path:
 
 
 class Settings(BaseSettings):
-    """Environment-driven settings, overridable via `.env` or real env vars (BNPL_ prefix)."""
+    """Central defaults; optionally override via `.env` or BNPL_* environment variables.
+
+    No environment file is required to use these settings.
+    """
 
     model_config = SettingsConfigDict(env_prefix="BNPL_", env_file=".env", extra="ignore")
 

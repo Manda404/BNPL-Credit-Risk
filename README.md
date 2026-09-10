@@ -154,8 +154,9 @@ Sample `predict-batch` output:
 | 5597 | 0.646 | 1 | High Risk | 2026-07-13_084031 |
 | 2162 | 0.027 | 0 | Low Risk | 2026-07-13_084031 |
 
-Copy `.env.example` to `.env` to override machine-specific paths or the log
-level. MLflow is configured centrally in `configs/training.yaml`.
+Default paths, log level and random seed are defined in the Pydantic `Settings`
+class in [`settings.py`](src/bnpl_credit_risk/settings.py). No `.env` file is
+required. MLflow is configured centrally in `configs/training.yaml`.
 
 ## Project layout
 
@@ -185,9 +186,11 @@ Nothing pipeline-relevant is hardcoded. Two layers, two concerns:
 - **`configs/*.yaml`** — pipeline/business configuration, versioned like code
   (data contract, feature scopes, model hyperparameters, split strategy,
   threshold policy, risk bands).
-- **`.env` / `BNPL_*` env vars** — deployment concerns (dataset path,
-  artifacts directory and log level). See
-  [`.env.example`](.env.example).
+- **`Settings` in [`settings.py`](src/bnpl_credit_risk/settings.py)** — typed
+  defaults for the dataset path, artifacts directory, logs directory, log level
+  and random seed. These work without an environment file. Optional `.env` or
+  `BNPL_*` environment variables can override them for a deployment (for example,
+  `BNPL_DATA_RAW_PATH=/path/to/dataset.csv`).
 
 Split strategy, validation policy, calibration, and decision-threshold
 policy are all switches, not hardcoded assumptions:
