@@ -107,7 +107,20 @@ class BatchInferencePipeline:
         *,
         model_version: str | None = None,
     ) -> TestSubmissionResult:
-        """Score test features without exposing labels, then attach truth."""
+        """Scorer le jeu de test puis exporter les résultats détaillés.
+
+        Paramètre :
+            model_version : version explicite ; sinon, celle de configs/inference.yaml.
+
+        Retour :
+            TestSubmissionResult avec le chemin du fichier, sa version et les tableaux.
+
+        La cible est isolée avant le scoring puis jointe par identifiant, jamais
+        par position. L'export conserve la probabilité, la classe et son libellé,
+        la vérité terrain, la justesse de la prédiction et la traçabilité du modèle.
+        submission_columns définit l'ordre des colonnes sauvegardées. Une colonne
+        configurée mais indisponible fait échouer l'export avant son écriture atomique.
+        """
         test_df = self.load_applications(self.input_path)
         target = self.config.data.target_column
         identifier = self.config.data.id_column
@@ -124,8 +137,19 @@ class BatchInferencePipeline:
             )
             detailed = pd.read_csv(batch_result.output_path)
 
-        detailed["predicted_label"] = detailed["predicted_default"].astype(int)
+        # Conserver la classe numérique publique et un libellé lisible dans le CSV.
+        detailed["default_risk_class"] = detailed["predicted_default"].astype(int)
+        detailed["predicted_class"] = detailed["default_risk_class"].map(
+            {
+                0: "Repayment predicted",
+                1: "Non-repayment predicted",
+            }
+        )
+        # Alias historique, pour les consommateurs qui utilisent encore predicted_label.
+        detailed["predicted_label"] = detailed["default_risk_class"]
+        # Rattacher la vérité uniquement après scoring, même si l'ordre des lignes change.
         detailed["true_label"] = detailed[identifier].map(true_labels).astype(int)
+        detailed["prediction_correct"] = detailed["default_risk_class"].eq(detailed["true_label"])
         submission = detailed.loc[:, self.config.inference.submission_columns]
         BatchPredictor.write_atomic(
             submission,

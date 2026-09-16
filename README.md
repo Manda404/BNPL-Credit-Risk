@@ -164,7 +164,7 @@ required. MLflow is configured centrally in `configs/training.yaml`.
 configs/                     YAML: data contract, features, model, training, inference, logging
 data/                         raw / interim / processed / predictions / reports
 artifacts/                    versioned models, figures, metrics, schemas
-notebooks/00 – 06              thin consumers of the package — no duplicated logic
+notebooks/00 – 07              thin consumers of the package — no duplicated logic
 src/bnpl_credit_risk/
 ├── cli.py                     Typer CLI — validate / train / evaluate / predict-batch
 ├── data/                       loading, schema, validation, quality, cleaning, splitting
@@ -231,7 +231,7 @@ poetry run mlflow server \
 ## Testing & quality
 
 ```bash
-poetry run pytest          # 51 tests — unit, integration, notebook-parity regression
+poetry run python -m pytest # unit, integration, notebook-parity regression
 poetry run ruff check .
 poetry run mypy src
 ```
@@ -263,3 +263,24 @@ poetry run mypy src
 - CatBoost / LightGBM via the existing `ModelFactory` extension point.
 - Realtime scoring API (the `Predictor` core is already IO-agnostic — see
   [`inference/realtime.py`](src/bnpl_credit_risk/inference/realtime.py)).
+
+
+## Realtime inference — FastAPI / notebook 07
+
+**Pour comprendre le code pas à pas : [README pédagogique de l’API](README_API.md).**
+
+L'API utilise le modèle `application_risk` approuvé par le notebook 05, avec les
+mêmes transformations, seuil et bandes de risque que l'inférence batch.
+
+```bash
+poetry install
+export BNPL_API_API_KEY="$(poetry run python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+poetry run bnpl-api
+```
+
+- API locale : `http://127.0.0.1:8000/docs` (authentification `X-API-Key`).
+- [Notebook 07](notebooks/07_realtime_inference.ipynb) : tests HTTP, erreurs, métriques,
+  parité avec le batch et mesure indicative de latence.
+- [Guide complet de l'API](docs/realtime_api.md) : architecture, contrat, configuration,
+  déploiement Docker, supervision et retour arrière.
+- [Configuration d'exemple](.env.api.example) et [Compose API](docker-compose.api.yml).

@@ -53,10 +53,26 @@ Steps (`inference/batch.py::BatchPredictor.run`):
 Notebook `06` uses `data/processed/test_features.csv` as a labeled evaluation
 partition. `BatchInferencePipeline.run_test_submission` preserves the target in
 a separate Series, delegates scoring to `BatchPredictor` (which drops the target
-before model input), then reconciles rows by `user_id`. It writes exactly two
-columns to `data/output/submission.csv`: `predicted_label` and `true_label`.
-Detailed probabilities and risk bands remain in memory for diagnostics and are
-not added to the requested submission file.
+before model input), then reconciles rows by `user_id`. It writes the detailed
+columns configured by `submission_columns` to `data/output/submission.csv`:
+
+| Column | Meaning |
+|---|---|
+| `user_id` | Identifier linking each score to its input |
+| `default_probability` | Estimated probability of default, between 0 and 1 |
+| `default_risk_class` | 1 when probability reaches or exceeds the published threshold; otherwise 0 |
+| `predicted_class` | Readable interpretation of the threshold comparison |
+| `predicted_label` | Compatibility alias of `default_risk_class` |
+| `true_label` | Observed target, attached only after scoring |
+| `prediction_correct` | Whether the predicted class equals the observed target |
+| `decision_threshold` | Threshold saved with the model |
+| `risk_band` | Probability band saved with the model |
+| `model_version` | Exact model version used |
+| `scoring_timestamp` | Scoring timestamp produced by Predictor |
+
+The output path is unchanged. The ordinary unlabeled batch output keeps its
+existing `predicted_default` column. A readable class describes the model result,
+not an approval or refusal of credit.
 
 `artifacts/models/latest.json` stores only a version identifier. The registry
 always resolves that identifier relative to the current project artifact

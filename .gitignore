@@ -17,6 +17,7 @@ poetry.lock.bak
 
 # Env
 .env
+.env.*
 
 # Data (raw dataset is small and versioned intentionally; generated data is not)
 data/interim/*
@@ -56,3 +57,6 @@ mlruns/
 .claude/
 .vscode/
 .idea/
+
+# Public API environment template (no credentials).
+!.env.api.example

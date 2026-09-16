@@ -1,0 +1,27 @@
+# Service indépendant du docker-compose.yml historique consacré au batch.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      BNPL_API_ENVIRONMENT: production
+      BNPL_API_API_KEY: ${BNPL_API_API_KEY:?Set a secret of at least 32 characters}
+      BNPL_API_MODEL_VERSION: ${BNPL_API_MODEL_VERSION:?Pin an approved model version}
+      BNPL_API_MAX_CONCURRENT_PREDICTIONS: "1"
+    volumes:
+      - ./artifacts/models:/app/artifacts/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    stop_grace_period: 40s

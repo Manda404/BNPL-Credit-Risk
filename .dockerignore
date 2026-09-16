@@ -1,0 +1,17 @@
+# Ni secrets, ni données clients, ni artefacts entraînés dans le contexte Docker.
+.git
+.venv
+.env
+.env.*
+**/__pycache__
+**/.ipynb_checkpoints
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage*
+htmlcov
+logs
+data
+artifacts
+Dev
+notebooks

@@ -1,4 +1,4 @@
-.PHONY: install lint typecheck test validate split-data train evaluate predict-batch pipeline clean
+.PHONY: install lint typecheck test validate split-data train evaluate predict-batch pipeline clean serve-api test-api
 
 install:
 	poetry install
@@ -35,3 +35,10 @@ pipeline: validate train evaluate
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage
+
+# FastAPI : la clé BNPL_API_API_KEY doit être configurée avant le démarrage.
+serve-api:
+	poetry run bnpl-api
+
+test-api:
+	poetry run python -m pytest tests/integration/test_realtime_api.py --no-cov

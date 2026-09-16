@@ -1,0 +1,36 @@
+name: Realtime API checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg
+      OMP_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Poetry
+        run: pipx install poetry==2.1.3
+      - name: Install locked dependencies
+        run: poetry install --no-interaction
+      - name: Check dependency lock
+        run: poetry check --lock
+      - name: Lint API and notebook
+        run: poetry run python -m ruff check src/bnpl_credit_risk/api tests/integration/test_realtime_api.py notebooks/07_realtime_inference.ipynb
+      - name: Typecheck API
+        run: poetry run python -m mypy src/bnpl_credit_risk/api --follow-imports=silent
+      - name: Test API and project regressions
+        run: poetry run python -m pytest --no-cov
+      - name: Build production image
+        run: docker build -f Dockerfile.api -t bnpl-api:ci .

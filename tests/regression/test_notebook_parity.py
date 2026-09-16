@@ -40,7 +40,10 @@ pytestmark = pytest.mark.skipif(
 def real_config():
     config = load_config(project_root() / "configs", model_config_path=project_root() / "configs" / "model_behavioral_risk.yaml")
     split = config.training.split.model_copy(update={"strategy": "stratified_random"})
-    training = config.training.model_copy(update={"split": split})
+    # La parité des scores ne teste pas MLflow : ne pas écrire dans le registre
+    # personnel configuré dans training.yaml pendant la suite automatisée.
+    mlflow = config.training.mlflow.model_copy(update={"enabled": False})
+    training = config.training.model_copy(update={"split": split, "mlflow": mlflow})
     return config.model_copy(update={"training": training})
 
 

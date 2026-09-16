@@ -21,9 +21,19 @@ output:
     - model_version
     - scoring_timestamp
 
+# Export détaillé du notebook 06 : scoring, vérité terrain et traçabilité.
 submission_columns:
-  - predicted_label
+  - user_id
+  - default_probability
+  - default_risk_class
+  - predicted_class
+  - predicted_label # alias conservé pour les consommateurs existants
   - true_label
+  - prediction_correct
+  - decision_threshold
+  - risk_band
+  - model_version
+  - scoring_timestamp
 
 visualization:
   size: [15, 6]

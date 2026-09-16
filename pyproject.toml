@@ -23,6 +23,10 @@ matplotlib = "^3.9"
 mlflow = "3.14.0"
 lightgbm = "^4.7.0"
 catboost = "^1.2.10"
+fastapi = "^0.139.0"
+uvicorn = "^0.51.0"
+httpx = "^0.28.1"
+prometheus-client = "^0.25.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
@@ -35,9 +39,11 @@ jupyter = "^1.0"
 ipykernel = "^6.29"
 pandas-stubs = "^2.2"
 types-pyyaml = "^6.0.12.20260518"
+httpx2 = "^2.13.0"
 
 [tool.poetry.scripts]
 bnpl-risk = "bnpl_credit_risk.cli:app"
+bnpl-api = "bnpl_credit_risk.api.cli:main"
 
 [build-system]
 requires = ["poetry-core>=1.9.0"]
