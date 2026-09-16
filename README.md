@@ -1,286 +1,369 @@
-<div align="center">
+<h1 align="center">BNPL Credit Risk</h1>
 
-# BNPL Credit Risk
+**Helping Buy Now, Pay Later teams assess repayment risk at checkout and balance credit losses with access to installment payments.**
 
-**Predicting Buy-Now-Pay-Later default risk — from a raw dataset to a production-grade, testable, auditable scoring pipeline.**
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue)](pyproject.toml)
+[![Poetry](https://img.shields.io/badge/Dependencies-Poetry-blue)](poetry.lock)
+[![FastAPI](https://img.shields.io/badge/Serving-FastAPI-009688)](src/bnpl_credit_risk/api/)
+[![MLflow](https://img.shields.io/badge/Tracking-MLflow-0194E2)](src/bnpl_credit_risk/tracking/)
+[![Checks](https://img.shields.io/badge/Checks-pytest%20%7C%20Ruff%20%7C%20mypy-blue)](.github/workflows/api-tests.yml)
 
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue?logo=python&logoColor=white)](pyproject.toml)
-[![Poetry](https://img.shields.io/badge/dependency%20management-Poetry-60A5FA?logo=poetry&logoColor=white)](pyproject.toml)
-[![Ruff](https://img.shields.io/badge/lint-Ruff-D7FF64?logo=ruff&logoColor=black)](pyproject.toml)
-[![mypy](https://img.shields.io/badge/types-mypy-2A6DB2)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-51%20passing-2EA043?logo=pytest&logoColor=white)](tests/)
-[![XGBoost](https://img.shields.io/badge/model-XGBoost-EC6E15)](src/bnpl_credit_risk/models/factory.py)
+## Business problem
 
-</div>
+Buy Now, Pay Later lets customers purchase today and repay in installments. For the provider, each application creates a trade-off: accepting a customer who does not repay can create a credit loss; declining a customer who would repay can mean a lost sale and customer relationship.
 
----
+This project estimates **non-repayment risk using information available at checkout**. It provides a consistent risk signal that a credit team can use alongside its lending policy.
 
-## Table of contents
+| Business need | Project capability | Intended use |
+|---|---|---|
+| Assess a new application | Real-time probability and binary risk class through an API | Inform an approval or review workflow |
+| Prioritize applications for review | Risk bands and a configurable decision threshold | Direct attention to higher-risk applications |
+| Evaluate decisions retrospectively | Batch export comparing predictions with observed outcomes | Identify missed defaults and repayment cases incorrectly flagged |
+| Trace a risk assessment | Model version, scoring timestamp and request identifier | Identify which model produced a prediction |
 
-1. [Overview](#overview)
-2. [The one decision that matters: leakage](#the-one-decision-that-matters-leakage)
-3. [Results](#results)
-4. [Architecture](#architecture)
-5. [Quickstart](#quickstart)
-6. [Project layout](#project-layout)
-7. [Configuration](#configuration)
-8. [Testing & quality](#testing--quality)
-9. [Documentation](#documentation)
-10. [Roadmap](#roadmap)
+These are intended uses. The repository implements scoring and evaluation; credit approval, manual review and lending rules belong to the consuming business application.
 
----
+## Understanding the risk decision
 
-## Overview
+The model estimates the probability that a BNPL transaction will default. A threshold saved with the model converts that probability into a binary prediction.
 
-A BNPL ("pay in installments") merchant needs to decide, at checkout,
-whether a customer is likely to default. This repository takes that problem
-from a single exploratory notebook to an installable Python package with a
-validated data contract, a reproducible training pipeline, calibrated
-probabilities, and a nightly batch-scoring command — the kind of thing that
-can actually run unattended in production.
+| Class | Display label | Rule |
+|---|---|---|
+| `0` | **Repayment predicted** | Default probability is below the threshold |
+| `1` | **Non-repayment predicted** | Default probability reaches or exceeds the threshold |
 
-| | |
-|---|---|
-| **Business question** | Should this BNPL application be approved? |
-| **Target** | `default_flag` (binary), ~39% positive rate |
-| **Data** | 10,345 transactions, 17 raw columns, Jan 2023 – Dec 2024, 6 markets |
-| **Model** | XGBoost, wrapped in one serializable `sklearn.Pipeline` |
-| **Origin** | Migrated from [`Dev/bnpl-credit-risk-eda-feature-engineering-xgboost.ipynb`](Dev/bnpl-credit-risk-eda-feature-engineering-xgboost.ipynb), kept unmodified for reference — full correspondence in [docs/notebook_migration.md](docs/notebook_migration.md) |
+These are model predictions, not guarantees of repayment or automatic credit approval decisions. The threshold is selected during evaluation and reused at inference time; it is not necessarily `0.5`.
 
-## The one decision that matters: leakage
+### The business trade-off behind the threshold
 
-Four columns in the raw dataset (`repayment_delay_days`, `missed_payments`,
-`risk_score`, `customer_segment`) describe events that only exist **after**
-a loan is granted. The original notebook fed all of them into a single
-model — which means its reported accuracy included information that
-doesn't exist at the moment a real decision must be made.
+- **Missed default:** the model predicts repayment but the customer defaults. This can expose the provider to a credit loss.
+- **False alert:** the model predicts non-repayment but the customer repays. Acting on that alert could unnecessarily restrict access to credit.
 
-This repository resolves that with two explicit, separately configurable
-profiles instead of one model that quietly blends both:
+Lowering the threshold flags more applications, generally catching more defaults while increasing false alerts. Raising it generally reduces alerts while allowing more defaults to go undetected.
 
-| Profile | Config | Uses post-origination signals? | Test ROC-AUC |
-|---|---|:---:|:---:|
-| **`application_risk`** — *production default* | [`configs/model.yaml`](configs/model.yaml) | No | **~0.70** |
-| `behavioral_risk` — collections / monitoring only | [`configs/model_behavioral_risk.yaml`](configs/model_behavioral_risk.yaml) | Yes | ~0.78 |
+The current threshold maximizes **F1**, a statistical balance between precision and recall. It does **not** optimize business profit or loss. A business-driven threshold would also need exposure amounts, loss given default, transaction margins and review costs.
 
-The ~0.08 AUC gap **is** the leakage, measured empirically
-(`tests/regression/test_notebook_parity.py`) rather than assumed. Full
-audit, evidence, and reasoning: [docs/data_contract.md](docs/data_contract.md#leakage-audit).
+## What this project delivers
 
-## Results
+The implementation connects this business question to a reproducible model-development and serving workflow:
 
-Reference metrics for the default `application_risk` model, time-based
-split (train on the earliest ~80% of transactions, test on the most recent
-~20% — see [docs/modeling.md](docs/modeling.md#split-strategy)):
+- **Eight notebooks**, from data discovery to real-time HTTP tests.
+- **XGBoost, LightGBM and CatBoost comparison**, with out-of-fold evaluation and MLflow tracking.
+- **Versioned model artifacts**, including the input schema, metrics, threshold and risk bands.
+- **Batch inference**, with a detailed CSV linking predictions to observed labels on the test partition.
+- **FastAPI inference**, with Pydantic validation, API-key authentication, Loguru logs and Prometheus metrics.
+- **Automated tests and deployment files**, including an API Dockerfile, Compose configuration and GitHub Actions workflow.
 
-| Metric | Value |
-|---|---|
-| ROC-AUC | 0.70 |
-| PR-AUC (Average Precision) | 0.54 |
-| Brier score | 0.22 |
-| F1 (at selected threshold) | 0.64 |
-| Decision threshold | 0.233 (`best_f1` policy, selected on train out-of-fold predictions) |
+## Contents
 
-<div align="center">
-<img src="docs/assets/confusion_matrix_and_roc.png" width="720" alt="Confusion matrix and ROC curve">
-</div>
+- [Business problem](#business-problem)
+- [Understanding the risk decision](#understanding-the-risk-decision)
+- [Get started](#get-started)
+- [Notebook workflow](#notebook-workflow)
+- [Architecture](#architecture)
+- [Data and leakage controls](#data-and-leakage-controls)
+- [Published model snapshot](#published-model-snapshot)
+- [Run the API](#run-the-api)
+- [Batch inference and CSV export](#batch-inference-and-csv-export)
+- [Configuration and MLflow](#configuration-and-mlflow)
+- [Docker deployment](#docker-deployment)
+- [Tests and quality checks](#tests-and-quality-checks)
+- [Project structure](#project-structure)
+- [Further documentation](#further-documentation)
 
-Full metric suite (specificity, balanced accuracy, KS statistic, calibration
-curve, business cost by threshold, ...) is computed on every run — see
-[docs/modeling.md#metrics](docs/modeling.md#metrics).
+## Get started
+
+### 1. Install the project
+
+Use Python **3.11 or 3.12** and Poetry. The CI workflow uses Poetry 2.1.3.
+
+```bash
+git clone https://github.com/Manda404/BNPL-Credit-Risk.git
+cd BNPL-Credit-Risk
+poetry install
+poetry env info --executable
+```
+
+Select the Python environment returned by the last command as your notebook kernel.
+
+### 2. Check the configuration
+
+Before training, review `configs/training.yaml`. Its MLflow settings currently point to a developer's local storage. Set `tracking_uri` and `artifact_uri` to locations available on your machine, or set `mlflow.enabled: false` to run without tracking.
+
+Validate the raw dataset:
+
+```bash
+poetry run bnpl-risk validate
+```
+
+### 3. Publish a model, then score it
+
+Run notebooks **00 → 05** for the guided model-development workflow. Complete the publication cell in notebook **05** before running **06** or **07**.
+
+Generated model artifacts are ignored by Git. A fresh clone needs a locally published model, or a trusted artifact bundle copied into `artifacts/models/`; cloning the repository alone does not provide a runnable model.
+
+Already have an approved model? Go directly to [Run the API](#run-the-api) or open [notebook 06](notebooks/06_batch_inference.ipynb) for the detailed batch export.
+
+## Notebook workflow
+
+The notebooks call reusable Python classes from `src/bnpl_credit_risk/`. Model loading, validation and scoring live in the package.
+
+| Notebook | Purpose | Main result |
+|---|---|---|
+| [00 — Data discovery](notebooks/00_data_discovery.ipynb) | Inspect the raw dataset | Initial data profile |
+| [01 — Data validation](notebooks/01_data_validation.ipynb) | Validate the contract and export a stratified split | Train/test CSV files |
+| [02 — Exploratory analysis](notebooks/02_exploratory_data_analysis.ipynb) | Explore distributions, drift and leakage | Data diagnostics and application-time datasets |
+| [03 — Feature engineering](notebooks/03_feature_engineering.ipynb) | Build configured features | Prepared development/test datasets |
+| [04 — Model training](notebooks/04_model_training.ipynb) | Compare XGBoost, LightGBM and CatBoost | Saved benchmark and tracked runs |
+| [05 — Model evaluation](notebooks/05_model_evaluation.ipynb) | Evaluate the selected model, choose a threshold and publish | Approved inference artifact |
+| [06 — Batch inference](notebooks/06_batch_inference.ipynb) | Score the labeled test partition | `data/output/submission.csv` with 11 columns |
+| [07 — Real-time inference](notebooks/07_realtime_inference.ipynb) | Check the environment, launch the API and test HTTP requests | Two accepted requests, two validation errors and API/batch parity checks |
+
+Notebook 07 starts a local server with `poetry run bnpl-api`, supplies a temporary API key and includes a shutdown cell. Run it step by step; stop any existing server on port 8000 before launching another one.
 
 ## Architecture
 
-```
-Raw CSV → Clean → Validate → Split (time-based) → Feature engineering
-                                                          │
-                                                          ▼
-                                          ┌─ ColumnTransformer (OneHotEncoder) ─┐
-                                          │                                     │
-                                          ▼                                     │
-                                     XGBoost ◄──────────────────────────────────┘
-                                          │
-                     ┌────────────────────┴────────────────────┐
-                     ▼                                          ▼
-        Threshold selection (train OOF)              Evaluation (held-out test)
-                     │                                          │
-                     └──────────────────► ArtifactBundle ◄──────┘
-                                    (pipeline.joblib + metadata + metrics
-                                     + threshold + feature_schema)
-                                                │
-                                                ▼
-                                    Batch inference (never retrains)
+```mermaid
+flowchart TD
+    A[Raw data] --> B[Validation and train/test split]
+    B --> C[Leakage controls and feature preparation]
+    C --> D[Boosting comparison and MLflow tracking]
+    D --> E[Evaluation and threshold selection]
+    E --> F[Approved ArtifactBundle]
+    F --> G[Shared Predictor]
+    G --> H[Batch pipeline: CSV export]
+    G --> I[RealtimeInferenceService: FastAPI]
+    I --> J[HTTP prediction response]
 ```
 
-Everything from "feature engineering" through "XGBoost" is **one fitted
-`sklearn.Pipeline`**, serialized as a single artifact — training and
-inference always run the exact same transformation code. Full breakdown of
-every module's responsibility: [docs/architecture.md](docs/architecture.md).
+An `ArtifactBundle` groups the saved model with `metadata.json`, `metrics.json`, `threshold.json` and `feature_schema.json`. The model can be a fitted boosting wrapper or a compatible sklearn pipeline. Inference uses the transformations saved with that artifact and never calls `fit`.
 
-## Quickstart
+The API loads and checks one model per process, runs a synthetic warmup prediction, then serves requests. Both serving paths use `Predictor` for probabilities, threshold decisions and risk bands.
 
-```bash
-# 1. Install (Python 3.11 or 3.12, Poetry ≥ 1.9)
-poetry install
+## Data and leakage controls
 
-# 2. Validate the data contract
-poetry run bnpl-risk validate
+The raw dataset contains **10,345 transactions and 17 columns**. Its binary target is `default_flag`.
 
-# 3. Optional: export a reproducible 90/10 stratified train/test dataset
-poetry run python scripts/split_data.py
+The project separates two scopes:
 
-# 4. Train (application_risk by default)
-poetry run bnpl-risk train
+| Scope | Intended use | Input restrictions |
+|---|---|---|
+| **`application_risk`** | Scoring at checkout | Excludes post-origination signals and undocumented target proxies |
+| `behavioral_risk` | Monitoring after origination | Allows additional repayment-related signals |
 
-# 5. Re-evaluate a saved model
-poetry run bnpl-risk evaluate --model-version latest
+For application-time scoring, the leakage guard excludes `repayment_delay_days`, `missed_payments`, `risk_score` and `customer_segment`. Repayment events are unavailable at checkout; `risk_score` and its derived segment are excluded because their provenance and pre-checkout availability are not established.
 
-# 6. Score a batch of new applications
-poetry run bnpl-risk predict-batch \
-  --input /path/to/applications.csv \
-  --output data/predictions/predictions_2026_07_13.csv
-```
+The API serves **`application_risk` only**. It rejects extra request fields, including the target and behavioral variables. Details: [data contract](docs/data_contract.md).
 
-Each command exits `0` on success, `1` on a data-contract violation, `2` on
-a technical error — safe to wire into cron, CI, or Airflow as-is (a
-scheduled GitHub Actions example is already in
-[.github/workflows/nightly_batch.yml](.github/workflows/nightly_batch.yml)).
+## Published model snapshot
 
-Sample `predict-batch` output:
+The following values come from the locally published **`2026-08-28_131115`** artifact, produced by notebooks 04–05. They describe this run, not every future model or a production performance guarantee.
 
-| user_id | default_probability | predicted_default | risk_band | model_version |
-|---|---|---|---|---|
-| 5310 | 0.812 | 1 | Very High Risk | 2026-07-13_084031 |
-| 5597 | 0.646 | 1 | High Risk | 2026-07-13_084031 |
-| 2162 | 0.027 | 0 | Low Risk | 2026-07-13_084031 |
-
-Default paths, log level and random seed are defined in the Pydantic `Settings`
-class in [`settings.py`](src/bnpl_credit_risk/settings.py). No `.env` file is
-required. MLflow is configured centrally in `configs/training.yaml`.
-
-## Project layout
-
-```
-configs/                     YAML: data contract, features, model, training, inference, logging
-data/                         raw / interim / processed / predictions / reports
-artifacts/                    versioned models, figures, metrics, schemas
-notebooks/00 – 07              thin consumers of the package — no duplicated logic
-src/bnpl_credit_risk/
-├── cli.py                     Typer CLI — validate / train / evaluate / predict-batch
-├── data/                       loading, schema, validation, quality, cleaning, splitting
-├── features/                   feature engineering + preprocessing pipeline
-├── models/                     factory, trainer, calibration, persistence, registry
-├── evaluation/                  metrics, thresholding, business cost, reports
-├── visualization/                EDA / evaluation / calibration plots
-├── pipelines/                     validation / training / evaluation / batch inference
-├── tracking/                      MLflow benchmark and approved-model runs
-└── inference/                      Predictor (core), batch, realtime
-tests/
-├── unit/ · integration/ · regression/    51 tests, real dataset + fixtures
-```
-
-## Configuration
-
-Nothing pipeline-relevant is hardcoded. Two layers, two concerns:
-
-- **`configs/*.yaml`** — pipeline/business configuration, versioned like code
-  (data contract, feature scopes, model hyperparameters, split strategy,
-  threshold policy, risk bands).
-- **`Settings` in [`settings.py`](src/bnpl_credit_risk/settings.py)** — typed
-  defaults for the dataset path, artifacts directory, logs directory, log level
-  and random seed. These work without an environment file. Optional `.env` or
-  `BNPL_*` environment variables can override them for a deployment (for example,
-  `BNPL_DATA_RAW_PATH=/path/to/dataset.csv`).
-
-Split strategy, validation policy, calibration, and decision-threshold
-policy are all switches, not hardcoded assumptions:
-
-```yaml
-# configs/training.yaml
-split:
-  strategy: time_based   # stratified_random | group_by_user | time_based
-threshold:
-  policy: best_f1         # fixed | best_f1 | min_recall | min_precision | cost_matrix
-mlflow:
-  enabled: true
-  tracking_uri: sqlite:////Users/surelmanda/.mlflow/mlflow.db
-  artifact_uri: file:///Users/surelmanda/.mlflow/artifacts
-  experiment_name: bnpl_credit_risk
-```
-
-Notebook 04 records one parent comparison run and one nested run per boosting
-model. Notebook 05 records the approved winner, final-test metrics, threshold,
-calibration, lift/gains, feature importance, SHAP summary and the published
-artifact in the shared platform used by the other local ML projects. Open its
-UI with one SQLite-safe worker:
-
-MLflow also stores the development and reserved-test datasets with source,
-schema, profile and digest; copies the CSV inputs; records fold and boosting-
-iteration metrics, OOF/test predictions, figures, configuration, dependency
-lockfile, Git commit and system metrics; logs a signed PyFunc model; and
-publishes the accepted version in the Model Registry under
-`bnpl_credit_risk_default_model@champion`.
-
-```bash
-poetry run mlflow server \
-  --backend-store-uri sqlite:////Users/surelmanda/.mlflow/mlflow.db \
-  --default-artifact-root file:///Users/surelmanda/.mlflow/artifacts \
-  --host 127.0.0.1 --port 5000 --workers 1
-```
-
-## Testing & quality
-
-```bash
-poetry run python -m pytest # unit, integration, notebook-parity regression
-poetry run ruff check .
-poetry run mypy src
-```
-
-- **Unit** — one behavior per test: leakage-safe feature scoping, division-by-zero
-  guards, threshold policies, splitters, validators.
-- **Integration** — full train → save → reload → batch-infer round trip on a
-  synthetic fixture, asserting identical predictions before/after serialization.
-- **Regression** — reproduces the original notebook's exact configuration on
-  the real dataset and checks ROC-AUC within tolerance of a hand-verified
-  reference value; separately asserts `application_risk` scores measurably
-  lower than `behavioral_risk`, confirming the leakage audit empirically.
-
-## Documentation
-
-| Document | Covers |
+| Item | Value |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | Module responsibilities, the one-pipeline rule |
-| [docs/data_contract.md](docs/data_contract.md) | Schema, validation policy, **leakage audit** |
-| [docs/modeling.md](docs/modeling.md) | Split strategy, threshold selection, calibration, metrics |
-| [docs/inference.md](docs/inference.md) | Batch contract, output schema, orchestration |
-| [docs/notebook_migration.md](docs/notebook_migration.md) | Notebook → package correspondence table |
-| [docs/model_card.md](docs/model_card.md) | Intended use, limitations, risks, retraining cadence |
+| Selected algorithm | CatBoost |
+| Scope | `application_risk` |
+| Development / reserved test rows | 9,310 / 1,035 |
+| Test ROC-AUC | 0.7144 |
+| Test PR-AUC | 0.5842 |
+| Test precision / recall | 0.4875 / 0.9208 |
+| Test F1 | 0.6375 |
+| Test Brier score | 0.2051 |
+| Decision threshold | 0.293952 — best F1 on development out-of-fold predictions |
 
-## Roadmap
+**Business interpretation:** on this reserved test set, the model flags about **92 out of 100 actual defaults**. Among every 100 applications flagged, about **49 actually default** and **51 repay**. This operating point catches most defaults but would create substantial unnecessary declines if every alert automatically triggered rejection.
 
-- SHAP-based explainability for individual decisions.
-- Fairness/disparate-impact audit across `employment_type` and `location`.
-- CatBoost / LightGBM via the existing `ModelFactory` extension point.
-- Realtime scoring API (the `Predictor` core is already IO-agnostic — see
-  [`inference/realtime.py`](src/bnpl_credit_risk/inference/realtime.py)).
+Business impact has not been measured in a live lending workflow. Before using scores to drive decisions, evaluate the default rate among accepted applications, approval rate, review volume and net credit losses under the proposed policy.
 
+The notebook workflow materializes a stratified split configured in `configs/data_split.yaml`. The separate CLI training workflow uses `configs/training.yaml`; its default time-based split is a different evaluation setup. Do not mix their reported metrics.
 
-## Realtime inference — FastAPI / notebook 07
+Inspect the active artifact's metadata and metrics, or use authenticated `GET /v1/model` for the version and threshold currently served by the API.
 
-**Pour comprendre le code pas à pas : [README pédagogique de l’API](README_API.md).**
+## Run the API
 
-L'API utilise le modèle `application_risk` approuvé par le notebook 05, avec les
-mêmes transformations, seuil et bandes de risque que l'inférence batch.
+### Start from a terminal
+
+With an approved model available, run both commands in the **same terminal**:
 
 ```bash
-poetry install
 export BNPL_API_API_KEY="$(poetry run python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 poetry run bnpl-api
 ```
 
-- API locale : `http://127.0.0.1:8000/docs` (authentification `X-API-Key`).
-- [Notebook 07](notebooks/07_realtime_inference.ipynb) : tests HTTP, erreurs, métriques,
-  parité avec le batch et mesure indicative de latence.
-- [Guide complet de l'API](docs/realtime_api.md) : architecture, contrat, configuration,
-  déploiement Docker, supervision et retour arrière.
-- [Configuration d'exemple](.env.api.example) et [Compose API](docker-compose.api.yml).
+The API key is required, including in development. Without it, startup fails with `api_key: Field required`. An existing notebook or another terminal does not automatically inherit an exported variable. Keep the same key on the server and client; do not generate a different one for each side.
+
+In another terminal, check the public readiness endpoint:
+
+```bash
+curl --fail http://127.0.0.1:8000/health/ready
+```
+
+Expected response: `{"status":"ready"}`. Interactive documentation is available at **http://127.0.0.1:8000/docs** in development. The root URL `/` has no route and returns 404. Use **Ctrl+C** to stop the terminal server.
+
+### Send a prediction request
+
+Run this from a client terminal where `BNPL_API_API_KEY` contains the **same key** used by the server:
+
+```bash
+curl --fail-with-body http://127.0.0.1:8000/v1/predict \
+  -H "X-API-Key: $BNPL_API_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_id": 123,
+    "age": 35,
+    "employment_type": "Salaried",
+    "monthly_income": 4000,
+    "credit_score": 700,
+    "purchase_amount": 300,
+    "product_category": "Electronics",
+    "bnpl_installments": 3,
+    "app_usage_frequency": 10,
+    "location": "USA",
+    "transaction_date": "2026-01-01",
+    "debt_to_income_ratio": 0.2
+  }'
+```
+
+The response includes `user_id`, `default_probability`, **`default_risk_class`**, `decision_threshold`, `risk_band`, `model_version`, a UTC `scoring_timestamp` and `request_id`. The notebook adds the readable class label when displaying this response.
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /health/live` | Public | Process liveness |
+| `GET /health/ready` | Public | Service loaded after successful warmup |
+| `GET /v1/model` | API key | Loaded model version, threshold and input contract |
+| `POST /v1/predict` | API key | One prediction per request |
+| `GET /metrics` | API key | Prometheus request counts and latency histograms |
+
+**Validation:** Pydantic checks fields and types; the project validator enforces configured bounds and categories. Invalid input returns **422**, an incorrect key **401**, an oversized body **413**, and exhausted scoring capacity **503**. The service allows one simultaneous prediction per process by default.
+
+**Logs:** Loguru emits structured JSON with event names, request IDs and model/version context. Request bodies and API keys are not logged by the API layer. A `prediction_completed` event with `request_id=startup` is the synthetic warmup test.
+
+## Batch inference and CSV export
+
+### Score new applications
+
+For a CSV without observed outcomes:
+
+```bash
+poetry run bnpl-risk predict-batch \
+  --input data/processed/applications_to_score.csv \
+  --output data/predictions/predictions.csv \
+  --model-version latest
+```
+
+Provide your own input file at that path. Required input fields follow the configured data contract. The ordinary batch output retains the historical class name **`predicted_default`**; it applies the same threshold rule as the API's `default_risk_class`.
+
+### Export the labeled test partition
+
+Run **notebook 06** to create `data/output/submission.csv`. It uses the test dataset, keeps the observed target out of the model input and joins labels back by `user_id` after scoring.
+
+| Column | Meaning |
+|---|---|
+| `user_id` | Identifier linking the prediction to the input |
+| `default_probability` | Estimated default probability |
+| `default_risk_class` | Binary prediction: 0 or 1 |
+| `predicted_class` | `Repayment predicted` or `Non-repayment predicted` |
+| `predicted_label` | Compatibility alias of `default_risk_class` |
+| `true_label` | Observed outcome from the test dataset |
+| `prediction_correct` | Whether prediction and observed outcome match |
+| `decision_threshold` | Threshold saved with the model |
+| `risk_band` | Probability band defined in the artifact |
+| `model_version` | Version used for scoring |
+| `scoring_timestamp` | Timestamp of the batch scoring run |
+
+Column selection and output location are configured in [configs/inference.yaml](configs/inference.yaml). Writes are atomic. `true_label` and `prediction_correct` belong to this labeled evaluation export; they are not available for new applications whose outcomes are unknown.
+
+## Configuration and MLflow
+
+| Configuration | Controls |
+|---|---|
+| [configs/data.yaml](configs/data.yaml) | Data schema, bounds and allowed categories |
+| [configs/data_split.yaml](configs/data_split.yaml) | Materialized split for the notebook workflow |
+| [configs/features.yaml](configs/features.yaml) | Feature definitions and leakage exclusions |
+| [configs/model.yaml](configs/model.yaml) | Scope, training parameters and boosting benchmark |
+| [configs/training.yaml](configs/training.yaml) | CLI split, threshold policy, risk bands and MLflow |
+| [configs/inference.yaml](configs/inference.yaml) | Model selection, validation and export columns |
+| [configs/logging.yaml](configs/logging.yaml) | Pipeline logging |
+| [.env.api.example](.env.api.example) | API environment-variable template |
+
+General paths can be overridden through `BNPL_*` variables, such as `BNPL_ARTIFACTS_DIR`. API settings use `BNPL_API_*`, including `API_KEY`, `MODEL_VERSION`, `ENVIRONMENT`, `HOST`, `PORT` and concurrency limits. The API configures its own JSON logging through `BNPL_API_LOG_LEVEL`.
+
+When enabled, MLflow records benchmark/model runs, metrics, predictions, diagnostic figures and publication information. Configure its storage before running notebooks 04–05. The serving API reads the local approved artifact registry; it does not require a running MLflow server to score requests.
+
+The Typer commands `bnpl-risk train` and `bnpl-risk evaluate` remain available for the separate sklearn/XGBoost workflow. Use notebooks 04–05 for the multi-model benchmark described above.
+
+## Docker deployment
+
+Set the API key as shown above and pin a version present in your local artifact registry:
+
+```bash
+# Replace this with the exact approved version you want to serve.
+export BNPL_API_MODEL_VERSION=2026-08-28_131115
+docker compose -f docker-compose.api.yml up --build -d
+```
+
+The API image runs as a non-root user. Compose mounts `artifacts/models` read-only, supplies resource limits and exposes the service on the host's loopback interface. Model files and secrets are not bundled into the image.
+
+Production mode requires an explicit model version and disables Swagger. TLS, external access control, secret rotation, alerting and capacity/load testing must be provided by the deployment platform. The container configuration is included; local container execution has not yet been validated because the Docker daemon was unavailable during implementation.
+
+## Tests and quality checks
+
+```bash
+# Full suite; Agg avoids graphical display requirements.
+MPLBACKEND=Agg poetry run python -m pytest --no-cov
+
+# Focused API and export checks.
+poetry run python -m pytest tests/integration/test_realtime_api.py \
+  tests/integration/test_submission_export.py --no-cov
+
+poetry run python -m ruff check src/bnpl_credit_risk/api \
+  tests/integration/test_realtime_api.py tests/integration/test_submission_export.py \
+  notebooks/07_realtime_inference.ipynb
+poetry run python -m mypy src/bnpl_credit_risk/api --follow-imports=silent
+poetry check --lock
+```
+
+Tests cover data contracts, leakage controls, training/scoring integration, API authentication, Pydantic errors, concurrency limits, lifecycle handling, model compatibility, API prediction parity and detailed CSV exports. The latest local full-suite verification passed **138 tests**.
+
+`httpx2` is included in development dependencies for Starlette's `TestClient`; `httpx` remains the HTTP client used by the API consumer and live notebook requests. After updating dependencies, restart an already running notebook kernel.
+
+The [API checks workflow](.github/workflows/api-tests.yml) defines lint, type checks, the test suite and a Docker build. A configured workflow is not evidence that its remote run or deployment has already succeeded.
+
+## Project structure
+
+```text
+configs/                         Versioned data, model and pipeline configuration
+notebooks/                       Guided workflow: 00 through 07
+src/bnpl_credit_risk/
+├── api/                         FastAPI app, schemas, service, middleware and client
+├── data/                        Loading, cleaning, validation, splitting and drift
+├── features/                    Feature engineering, preprocessing and leakage controls
+├── models/                      Model implementations, calibration and persistence
+├── evaluation/                  Metrics, threshold selection and diagnostics
+├── inference/                   Shared Predictor and file-based batch scoring
+├── pipelines/                   Training, evaluation and inference orchestration
+├── tracking/                    MLflow tracking and model publication
+├── visualization/               Analysis and reporting figures
+└── cli.py                       bnpl-risk commands
+artifacts/models/                Local versioned artifacts and latest.json
+data/                           Raw, intermediate, prepared and output datasets
+tests/                           Unit, integration and regression tests
+docs/                            Data, modeling, inference and deployment guides
+Dockerfile.api                   API container image
+docker-compose.api.yml          API runtime configuration
+```
+
+## Further documentation
+
+| Guide | Focus |
+|---|---|
+| [API walkthrough](README_API.md) | Classes, functions and the complete request lifecycle, in French |
+| [API operations](docs/realtime_api.md) | Configuration, endpoints, monitoring and rollback |
+| [Batch inference](docs/inference.md) | Input/output contracts and orchestration |
+| [Data contract](docs/data_contract.md) | Validation rules and leakage analysis |
+| [Architecture](docs/architecture.md) | Package organization and original pipeline design |
+| [Modeling](docs/modeling.md) | Split strategies, thresholds and the original sklearn workflow |
+| [Model card](docs/model_card.md) | Intended use and limitations of the original reference model |
+| [Notebook migration](docs/notebook_migration.md) | Correspondence with the original exploratory notebook |
+
+Historical modeling documentation describes earlier reference runs. For the model you actually serve, use its versioned metadata, metrics and threshold files and the results of notebook 05.
